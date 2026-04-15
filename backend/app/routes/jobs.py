@@ -106,6 +106,14 @@ def update_job_status(job_id):
         
         conn.commit()
     
+    # Update preference weights based on this action
+    if new_status in {"applied", "saved", "skipped"}:
+        try:
+            from app.services.scorer import update_preference_weights
+            update_preference_weights(job_id, new_status)
+        except Exception:
+            pass  # Non-critical — don't fail the status update
+    
     return jsonify({"message": f"Job status updated to '{new_status}'", "job_id": job_id})
 
 
@@ -149,7 +157,7 @@ def get_job_stats():
 def refresh_jobs():
     """
     Trigger a new job search across all sources.
-    Uses the 6-layer fetching strategy with source routing.
+    Full pipeline: Fetch → Blacklist Filter → Deduplicate → Score
     """
     # Check if profile exists
     profile = execute_query(
@@ -159,23 +167,30 @@ def refresh_jobs():
     if not profile:
         return jsonify({"error": "No profile found. Upload a resume first."}), 400
     
-    # Run the fetcher
     from flask import current_app
     from app.services.job_fetcher import fetch_all_jobs
+    from app.services.blacklist_engine import apply_blacklist
+    from app.services.deduplicator import deduplicate_jobs
+    from app.services.scorer import score_all_jobs
 
     try:
+        # Step 1: Fetch jobs from all sources
         new_count = fetch_all_jobs(profile, current_app.config)
-        
-        # Run scorer on new jobs after fetching
-        try:
-            from app.services.scorer import score_all_jobs
-            scored = score_all_jobs(profile)
-        except ImportError:
-            scored = 0
-        
+
+        # Step 2: Apply blacklist filters
+        filtered = apply_blacklist()
+
+        # Step 3: Deduplicate across sources
+        deduped = deduplicate_jobs()
+
+        # Step 4: Score remaining jobs against profile
+        scored = score_all_jobs(profile)
+
         return jsonify({
             "message": f"Found {new_count} new jobs",
             "new_jobs": new_count,
+            "filtered": filtered,
+            "deduplicated": deduped,
             "scored": scored,
             "profile_used": profile.get("primary_role", ""),
         })
