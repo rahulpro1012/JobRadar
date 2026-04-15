@@ -42,23 +42,19 @@ def upload_resume():
     upload_path = os.path.join(current_app.config["UPLOAD_FOLDER"], f"resume.{ext}")
     file.save(upload_path)
     
-    # Phase 2 will implement actual parsing. For now, return a placeholder.
-    # The parser will be called here: profile_data = parse_resume(upload_path)
+    # Parse resume into structured profile
+    from app.services.resume_parser import parse_resume
+    try:
+        profile_data = parse_resume(upload_path)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 422
+    except Exception as e:
+        return jsonify({"error": f"Failed to parse resume: {str(e)}"}), 500
     
-    profile_data = {
-        "name": "",
-        "primary_role": "Full Stack Developer",
-        "role_variants": json.dumps(["Software Engineer", "Web Developer", "Java Developer"]),
-        "experience_years": 2.0,
-        "experience_level": "Junior-Mid",
-        "core_skills": json.dumps(["Java", "Spring Boot", "React", "JavaScript"]),
-        "secondary_skills": json.dumps(["Git", "JUnit", "SQL", "REST APIs"]),
-        "tools": json.dumps(["Maven", "Jenkins", "Docker", "IntelliJ"]),
-        "domain_keywords": json.dumps(["web application", "microservices", "CI/CD"]),
-        "education": "B.Tech Computer Science",
-        "location": "Mumbai",
-        "resume_text": "(parsed text will go here)",
-    }
+    # Convert lists to JSON strings for storage
+    for field in ["role_variants", "core_skills", "secondary_skills", "tools", "domain_keywords"]:
+        if isinstance(profile_data.get(field), list):
+            profile_data[field] = json.dumps(profile_data[field])
     
     # Upsert profile (replace existing or insert new)
     with get_connection() as conn:
