@@ -153,13 +153,11 @@ jobradar/
 
 ## Build Phases
 
-- [x] **Phase 1** — Project scaffolding, database, API skeleton, React shell
-- [ ] **Phase 2** — Resume parser + profile extraction
-- [ ] **Phase 3** — Job fetcher (6 source layers + source router)
-- [ ] **Phase 4** — Relevance scorer + deduplicator + blacklist engine
-- [ ] **Phase 5** — Complete REST API integration
-- [ ] **Phase 6** — React dashboard (polished UI)
-- [ ] **Phase 7** — Preference learning, auto-refresh, deployment
+- [x] **Phase 1** — Project scaffolding, database (7 tables), API skeleton (19 endpoints), React shell
+- [x] **Phase 2** — Resume parser: text extraction, skill matching (~500 skills), experience detection, role inference
+- [x] **Phase 3** — Job fetcher: 6-layer source routing, query engine, career page scraping, RSS feeds
+- [x] **Phase 4** — Relevance scorer (0-100), deduplication engine, blacklist filter, preference learning
+- [x] **Phase 5-7** — Complete React dashboard, toast notifications, wake-up screen, deployment-ready
 
 ## License
 
