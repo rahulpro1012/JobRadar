@@ -1,0 +1,17 @@
+flask==3.1.1
+flask-cors==5.0.1
+gunicorn==23.0.0
+# Resume parsing (Phase 2)
+pdfminer.six==20231228
+docx2txt==0.8
+# Scraping (Phase 3)
+requests==2.32.3
+beautifulsoup4==4.12.3
+feedparser==6.0.11
+# Deduplication (Phase 4)
+fuzzywuzzy==0.18.0
+python-Levenshtein==0.26.1
+# Scheduling (Phase 6)
+APScheduler==3.10.4
+# Turso support (production)
+# libsql-experimental==0.0.49
