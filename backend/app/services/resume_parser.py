@@ -128,6 +128,22 @@ def extract_skills(text):
     # Multi-word skills first (longer matches take priority)
     sorted_skills = sorted(ALL_SKILLS, key=len, reverse=True)
 
+    # Skills that commonly produce false positives from substrings
+    # e.g., "ember" in "September", "scala" in "scalable", "go" in "going"
+    substring_false_positives = {
+        "ember": ["september", "november", "december", "remember", "member"],
+        "scala": ["scalable", "scalability", "scaling"],
+        "go": ["going", "good", "google", "goal", "gone", "got"],
+        "r": ["for", "or", "are", "your", "our"],
+        "c": ["css", "ci/cd"],
+        "dart": ["standard", "darting"],
+        "ion": ["action", "function", "application", "session"],
+        "ant": ["want", "relevant", "significant"],
+        "gin": ["engineering", "login", "staging"],
+        "echo": ["technology"],
+        "flux": ["influx"],
+    }
+
     for skill in sorted_skills:
         # Use word boundary matching for short skills to avoid false positives
         if len(skill) <= 2:
@@ -136,12 +152,24 @@ def extract_skills(text):
         elif len(skill) <= 3:
             pattern = r"\b" + re.escape(skill) + r"\b"
         else:
-            # For longer skills, be more flexible
-            pattern = re.escape(skill)
+            # For longer skills, use word boundaries too
+            pattern = r"\b" + re.escape(skill) + r"\b"
 
         matches = re.findall(pattern, text_lower)
         if matches:
-            skill_counts[skill] = len(matches)
+            # Check for substring false positives
+            if skill in substring_false_positives:
+                false_containers = substring_false_positives[skill]
+                # Count real matches (not inside a false positive word)
+                real_count = len(matches)
+                for fp_word in false_containers:
+                    fp_matches = len(re.findall(re.escape(fp_word), text_lower))
+                    real_count -= fp_matches
+                if real_count <= 0:
+                    continue
+                skill_counts[skill] = real_count
+            else:
+                skill_counts[skill] = len(matches)
 
     # Categorize by frequency
     # Core skills: mentioned 2+ times or in title/header section
@@ -155,7 +183,8 @@ def extract_skills(text):
                     "system", "network", "database", "framework",
                     "library", "platform", "environment", "language",
                     "authentication", "authorization", "encryption",
-                    "hashing", "logging", "monitoring", "alerting"}
+                    "hashing", "logging", "monitoring", "alerting",
+                    "ember", "backbone", "caching", "apache"}
     
     core = []
     secondary = []
@@ -479,8 +508,12 @@ def extract_name(text, sections=None):
     return ""
 
 
-def extract_location(text):
-    """Extract location from resume text."""
+def extract_location(text, sections=None):
+    """
+    Extract location from resume text.
+    Prioritizes the header/contact section (current location)
+    over locations mentioned in experience or education.
+    """
     # Common Indian cities
     indian_cities = [
         "Mumbai", "Delhi", "Bangalore", "Bengaluru", "Hyderabad",
@@ -494,11 +527,42 @@ def extract_location(text):
         "Thiruvananthapuram", "Mysore", "Mysuru",
     ]
 
+    # Strategy 1: Check header section first (most likely current location)
+    header = sections.get("header", "") if sections else ""
+    if header:
+        for city in indian_cities:
+            if re.search(r"\b" + re.escape(city) + r"\b", header, re.IGNORECASE):
+                return city
+
+    # Strategy 2: Check the first 3 lines of the entire text (contact info area)
+    first_lines = "\n".join(text.split("\n")[:5])
+    for city in indian_cities:
+        if re.search(r"\b" + re.escape(city) + r"\b", first_lines, re.IGNORECASE):
+            return city
+
+    # Strategy 3: Check near "present" or current job (current work location)
+    present_match = re.search(
+        r"(?:present|current|ongoing).*?\n(.*?)(?:\n|$)",
+        text, re.IGNORECASE
+    )
+    if not present_match:
+        # Try the line BEFORE "present"
+        present_match = re.search(
+            r"([^\n]+)(?:\s+\w+\s+\d{4}\s*-\s*(?:present|current))",
+            text, re.IGNORECASE
+        )
+    if present_match:
+        context = present_match.group(0)
+        for city in indian_cities:
+            if re.search(r"\b" + re.escape(city) + r"\b", context, re.IGNORECASE):
+                return city
+
+    # Strategy 4: Fall back to first city mentioned anywhere
     for city in indian_cities:
         if re.search(r"\b" + re.escape(city) + r"\b", text, re.IGNORECASE):
             return city
 
-    # Try generic location patterns
+    # Strategy 5: Try generic location patterns
     loc_match = re.search(
         r"(?:location|city|address|based\s*(?:in|at)|residing\s*(?:in|at))\s*[:\-]?\s*([A-Za-z\s]+?)(?:\n|,|\.|$)",
         text,
@@ -619,7 +683,7 @@ def parse_resume(filepath):
     experience_level = get_experience_level(experience_years)
     primary_role, role_variants = detect_role(raw_text, core_skills, sections)
     name = extract_name(raw_text, sections)
-    location = extract_location(raw_text)
+    location = extract_location(raw_text, sections)
     education = extract_education(raw_text, sections)
     domain_keywords = extract_domain_keywords(raw_text)
 

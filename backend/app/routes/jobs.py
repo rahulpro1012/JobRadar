@@ -149,8 +149,7 @@ def get_job_stats():
 def refresh_jobs():
     """
     Trigger a new job search across all sources.
-    Phase 3 will implement the actual fetching logic.
-    Returns status of the refresh operation.
+    Uses the 6-layer fetching strategy with source routing.
     """
     # Check if profile exists
     profile = execute_query(
@@ -160,12 +159,25 @@ def refresh_jobs():
     if not profile:
         return jsonify({"error": "No profile found. Upload a resume first."}), 400
     
-    # Phase 3 will call:
-    # from app.services.job_fetcher import fetch_all_jobs
-    # new_jobs_count = fetch_all_jobs(profile)
-    
-    return jsonify({
-        "message": "Job refresh will be implemented in Phase 3",
-        "profile_used": profile.get("primary_role", ""),
-        "status": "pending_implementation"
-    })
+    # Run the fetcher
+    from flask import current_app
+    from app.services.job_fetcher import fetch_all_jobs
+
+    try:
+        new_count = fetch_all_jobs(profile, current_app.config)
+        
+        # Run scorer on new jobs after fetching
+        try:
+            from app.services.scorer import score_all_jobs
+            scored = score_all_jobs(profile)
+        except ImportError:
+            scored = 0
+        
+        return jsonify({
+            "message": f"Found {new_count} new jobs",
+            "new_jobs": new_count,
+            "scored": scored,
+            "profile_used": profile.get("primary_role", ""),
+        })
+    except Exception as e:
+        return jsonify({"error": f"Refresh failed: {str(e)}"}), 500
