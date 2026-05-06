@@ -57,7 +57,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     adjusted_score INTEGER DEFAULT 0,
     status TEXT DEFAULT 'new' CHECK(status IN ('new', 'saved', 'applied', 'skipped', 'archived')),
     duplicate_cluster_id INTEGER DEFAULT NULL,
-    also_on TEXT DEFAULT '[]'
+    also_on TEXT DEFAULT '[]',
+    ai_score INTEGER DEFAULT NULL,
+    ai_reason TEXT DEFAULT ''
 );
 
 -- Multi-level blacklist

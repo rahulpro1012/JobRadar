@@ -26,7 +26,9 @@ class Config:
     GOOGLE_CSE_API_KEY = os.environ.get("GOOGLE_CSE_API_KEY", "")
     GOOGLE_CSE_CX = os.environ.get("GOOGLE_CSE_CX", "")
     BING_API_KEY = os.environ.get("BING_API_KEY", "")
-    
+    JOOBLE_API_KEY = os.environ.get("JOOBLE_API_KEY", "")
+    SERPAPI_API_KEY = os.environ.get("SERPAPI_API_KEY", "")
+    GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
     # CORS
     FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:5173")
     
