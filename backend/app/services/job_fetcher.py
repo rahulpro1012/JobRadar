@@ -69,6 +69,7 @@ def fetch_all_jobs(profile, config):
     all_jobs.extend(rss_jobs)
 
     # Layer 3: Google Custom Search API (100/day)
+    # Budget: max 8 calls per refresh → supports 12+ refreshes/day
     google_key = config.get("GOOGLE_CSE_API_KEY", "")
     google_cx = config.get("GOOGLE_CSE_CX", "")
     if google_key and google_cx:
@@ -76,9 +77,11 @@ def fetch_all_jobs(profile, config):
         remaining = QUOTA_LIMITS["google_cse"] - today_usage
         if remaining > 0:
             logger.info(f"Layer 3: Google CSE ({remaining} calls remaining)...")
-            site_queries = generate_site_queries(queries)
-            # Use at most half our remaining quota per refresh
-            max_calls = min(remaining // 2, len(site_queries))
+            # Only use Tier 1 + top Tier 2 queries, and only top 2 sites (naukri, linkedin)
+            top_queries = [q for q in queries if q["tier"] <= 2][:3]
+            top_sites = ["naukri.com", "linkedin.com/jobs"]
+            site_queries = generate_site_queries(top_queries, top_sites)
+            max_calls = min(8, remaining, len(site_queries))
             for sq in site_queries[:max_calls]:
                 jobs = _fetch_from_google_cse(sq["site_query"], google_key, google_cx, scrape_delay)
                 all_jobs.extend(jobs)
@@ -86,14 +89,16 @@ def fetch_all_jobs(profile, config):
             logger.info("Layer 3: Google CSE quota exhausted, skipping.")
 
     # Layer 4: Bing Web Search API (1000/month)
+    # Budget: max 6 calls per refresh
     bing_key = config.get("BING_API_KEY", "")
     if bing_key:
         today_usage = get_quota_usage("bing")
         remaining = QUOTA_LIMITS["bing"] - today_usage
         if remaining > 0:
             logger.info(f"Layer 4: Bing ({remaining} calls remaining)...")
-            site_queries = generate_site_queries(queries)
-            max_calls = min(remaining // 2, len(site_queries))
+            top_queries = [q for q in queries if q["tier"] <= 2][:3]
+            site_queries = generate_site_queries(top_queries, ["indeed.co.in"])
+            max_calls = min(6, remaining, len(site_queries))
             for sq in site_queries[:max_calls]:
                 jobs = _fetch_from_bing(sq["site_query"], bing_key, scrape_delay)
                 all_jobs.extend(jobs)
@@ -174,7 +179,9 @@ def _fetch_from_career_pages(profile, delay=1.0):
 def _scrape_career_page(url, company_name, search_terms, location):
     """
     Scrape a company career page for job listings.
-    This is a best-effort scraper that looks for common patterns.
+    Most career pages are JS-rendered SPAs, so instead of trying to scrape
+    individual job links (which usually fail), we generate direct search
+    URLs that the user can click to see filtered results on the career page.
     """
     import requests
     from bs4 import BeautifulSoup
@@ -194,53 +201,138 @@ def _scrape_career_page(url, company_name, search_terms, location):
     soup = BeautifulSoup(resp.text, "html.parser")
     jobs = []
 
-    # Look for job listing links — common patterns across career pages
-    # Strategy: find <a> tags whose text or href contains job-related keywords
     search_lower = [t.lower() for t in search_terms]
     location_lower = location.lower() if location else ""
 
     for link in soup.find_all("a", href=True):
-        text = link.get_text(strip=True).lower()
-        href = link["href"].lower()
+        text = link.get_text(strip=True)
+        text_lower = text.lower()
+        href = link["href"]
+        href_lower = href.lower()
 
         # Skip non-job links
-        if len(text) < 5 or len(text) > 150:
+        if len(text) < 8 or len(text) > 150:
             continue
-        if any(skip in href for skip in ["#", "javascript:", "mailto:", "login", "signup"]):
+        if any(skip in href_lower for skip in ["#", "javascript:", "mailto:", "login", "signup", "privacy", "terms", "contact", "about"]):
             continue
 
-        # Check if this looks like a job listing
-        is_job_link = any(kw in href for kw in ["/job", "/position", "/career", "/opening", "/role", "/vacancy"])
-        has_relevant_text = any(term in text for term in search_lower)
-        has_dev_keyword = any(kw in text for kw in ["developer", "engineer", "programmer", "architect", "analyst"])
+        # Build full URL
+        full_url = href if href.startswith("http") else urljoin(url, href)
 
-        if is_job_link or (has_relevant_text and has_dev_keyword):
-            # Build full URL
-            full_url = href if href.startswith("http") else urljoin(url, link["href"])
-            title = link.get_text(strip=True)
+        # CRITICAL: Check if this is an actual job listing vs a navigation link
+        if not _is_valid_job_url(full_url):
+            continue
 
-            # Extract location if visible near the link
-            parent = link.parent
-            loc_text = ""
-            if parent:
-                parent_text = parent.get_text(strip=True).lower()
-                if location_lower and location_lower in parent_text:
-                    loc_text = location
+        # Must have a developer/engineer keyword in the link text
+        has_dev_keyword = any(kw in text_lower for kw in [
+            "developer", "engineer", "programmer", "architect", "analyst",
+            "sde", "swe", "intern", "lead", "manager", "designer",
+            "devops", "qa", "tester", "consultant",
+        ])
 
-            jobs.append({
-                "title": title[:150],
-                "company": company_name,
-                "location": loc_text or location,
-                "source_url": full_url,
-                "source_domain": urlparse(url).hostname or "",
-                "description_snippet": "",
-                "posted_date": "",
-            })
+        if not has_dev_keyword:
+            continue
 
-            if len(jobs) >= 10:  # Cap per company
-                break
+        # Extract location if visible near the link
+        parent = link.parent
+        loc_text = ""
+        if parent:
+            parent_text = parent.get_text(strip=True).lower()
+            if location_lower and location_lower in parent_text:
+                loc_text = location
+
+        jobs.append({
+            "title": text[:150],
+            "company": company_name,
+            "location": loc_text or location,
+            "source_url": full_url,
+            "source_domain": urlparse(url).hostname.replace("www.", "") if urlparse(url).hostname else "",
+            "description_snippet": "",
+            "posted_date": "",
+        })
+
+        if len(jobs) >= 10:  # Cap per company
+            break
 
     return jobs
+
+
+def _is_valid_job_url(url):
+    """
+    Check if a URL looks like an actual job listing page
+    (not a homepage, search page, or navigation link).
+    
+    Valid job URLs typically have:
+      - A job ID or slug in the path (e.g., /job/12345, /position/java-developer-pune)
+      - Query parameters with job IDs (e.g., ?jobId=12345)
+    
+    Invalid URLs:
+      - Career homepages (e.g., /careers, /jobs)
+      - Search/listing pages (e.g., /search-jobs, /job-search)
+      - Generic navigation (e.g., /about, /benefits)
+    """
+    try:
+        parsed = urlparse(url)
+        path = parsed.path.lower().rstrip("/")
+        query = parsed.query.lower()
+    except Exception:
+        return False
+
+    path_parts = [p for p in path.split("/") if p]
+
+    # ── Early accepts (before any rejection) ──
+
+    # Known job-viewing paths with query params (e.g., indeed.co.in/viewjob?jk=...)
+    job_view_paths = ["/viewjob", "/job-detail", "/jobdetail", "/job-view"]
+    if any(path.startswith(p) for p in job_view_paths) and query:
+        return True
+
+    # URL has a job ID in query string (e.g., ?jk=abc, ?jobId=123)
+    if re.search(r"(?:job|id|ref|position|jk|vjk|fccid)\w*=", query):
+        return True
+
+    # ── Rejections ──
+
+    # Path is too short (likely a homepage)
+    if len(path_parts) < 2:
+        return False
+
+    # Known navigation/listing patterns
+    reject_paths = [
+        "/careers", "/career", "/jobs", "/job-search", "/search-jobs",
+        "/search", "/all-jobs", "/joblist", "/job-list", "/openings",
+        "/opportunities", "/join-us", "/work-with-us", "/life-at",
+        "/benefits", "/culture", "/about", "/teams", "/locations",
+        "/hiring", "/recruitment", "/apply",
+    ]
+    if path in reject_paths:
+        return False
+
+    # Last segment is a generic listing/navigation keyword
+    last_segment = path_parts[-1] if path_parts else ""
+    reject_segments = [
+        "jobs", "careers", "openings", "positions", "search",
+        "results", "listings", "all", "index", "home",
+        "collections", "recommended", "saved", "applied", "list",
+    ]
+    if last_segment in reject_segments and not query:
+        return False
+
+    # ── Accepts ──
+
+    # Job ID in path (e.g., /job/12345)
+    if re.search(r"/\d{4,}", path):
+        return True
+
+    # Slug pattern (e.g., /java-developer-pune)
+    if re.search(r"/[a-z]+-[a-z]+-[a-z]+", path):
+        return True
+
+    # Deep path (3+ segments = likely specific page)
+    if len(path_parts) >= 3:
+        return True
+
+    return False
 
 
 # ============================================================
@@ -603,19 +695,37 @@ def _parse_search_result(title, url, snippet=""):
     """
     Parse a search result into a normalized job dict.
     Extracts company, location, and domain from the result.
+    Rejects non-job URLs (homepages, search pages, blog posts).
     """
     domain = urlparse(url).hostname or ""
     domain = domain.replace("www.", "")
 
-    # Skip non-job URLs
+    # Skip non-job domains
     skip_domains = ["youtube.com", "facebook.com", "twitter.com", "instagram.com",
                     "wikipedia.org", "quora.com", "reddit.com", "medium.com",
-                    "stackoverflow.com", "github.com", "geeksforgeeks.org"]
+                    "stackoverflow.com", "github.com", "geeksforgeeks.org",
+                    "glassdoor.com", "ambitionbox.com", "payscale.com",
+                    "coursera.org", "udemy.com", "w3schools.com"]
     if any(sd in domain for sd in skip_domains):
         return None
 
+    # Skip non-job title patterns
+    title_lower = title.lower()
+    skip_title_keywords = [
+        "how to", "tutorial", "guide", "salary", "review", "interview questions",
+        "vs ", "what is", "best ", "top 10", "course", "certification",
+        "resume template", "cover letter",
+    ]
+    if any(kw in title_lower for kw in skip_title_keywords):
+        return None
+
+    # For job portal URLs, validate they point to specific listings
+    job_portals = ["naukri.com", "indeed.co.in", "indeed.com", "linkedin.com"]
+    is_portal = any(p in domain for p in job_portals)
+    if is_portal and not _is_valid_job_url(url):
+        return None
+
     # Try to extract company from title patterns
-    # Common patterns: "Title - Company" or "Title | Company" or "Title at Company"
     company = ""
     job_title = title
 
@@ -634,21 +744,36 @@ def _parse_search_result(title, url, snippet=""):
         company = at_match.group(2).strip()
 
     # Clean up title — remove domain suffixes
-    for suffix in ["| Naukri.com", "| Indeed", "| LinkedIn", "- LinkedIn"]:
+    for suffix in ["| Naukri.com", "| Indeed", "| Indeed.com", "| LinkedIn",
+                    "- LinkedIn", "- Naukri.com", "- Indeed.co.in",
+                    "Naukri.com", "Indeed.co.in", "LinkedIn"]:
         job_title = job_title.replace(suffix, "").strip()
         company = company.replace(suffix, "").strip()
+
+    # Remove trailing punctuation
+    job_title = job_title.strip(" -|–—")
+    company = company.strip(" -|–—")
 
     # Extract location from snippet
     location = ""
     loc_match = re.search(
-        r"(?:location|city|place)[:\s]+([A-Za-z\s,]+?)(?:\.|;|$)",
+        r"(?:location|city|place|in)\s*[:\-]?\s*([A-Z][a-z]+(?:\s*,\s*[A-Z][a-z]+)?)",
         snippet,
-        re.IGNORECASE,
     )
     if loc_match:
         location = loc_match.group(1).strip()[:100]
 
-    if not job_title or len(job_title) < 3:
+    if not job_title or len(job_title) < 5:
+        return None
+
+    # Final check: title should look like a job role, not a page title
+    has_role_word = any(kw in title_lower for kw in [
+        "developer", "engineer", "architect", "analyst", "designer",
+        "manager", "lead", "intern", "trainee", "consultant", "specialist",
+        "administrator", "devops", "sre", "qa", "tester", "programmer",
+        "sde", "swe", "full stack", "frontend", "backend",
+    ])
+    if not has_role_word:
         return None
 
     return {

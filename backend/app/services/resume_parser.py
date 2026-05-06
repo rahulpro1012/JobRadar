@@ -443,7 +443,7 @@ def _generate_role_variants(primary_role, core_skills):
     variants = set()
     core_lower = [s.lower() for s in core_skills]
 
-    # Base variants
+    # Base variants — swap Developer/Engineer
     role_base = primary_role.lower()
     if "developer" in role_base:
         variants.add(primary_role.replace("Developer", "Engineer"))
@@ -453,18 +453,42 @@ def _generate_role_variants(primary_role, core_skills):
     # Skill-specific variants
     if "java" in core_lower:
         variants.add("Java Developer")
+        variants.add("Java Backend Developer")
         if any(s in core_lower for s in ["react", "angular", "vue"]):
             variants.add("Java Full Stack Developer")
     if "spring boot" in core_lower or "spring" in core_lower:
         variants.add("Spring Boot Developer")
     if "react" in core_lower:
         variants.add("React Developer")
+        variants.add("Frontend Developer")
     if "node.js" in core_lower:
         variants.add("Node.js Developer")
     if "python" in core_lower:
         variants.add("Python Developer")
+    if "go" in core_lower or "golang" in core_lower:
+        variants.add("Go Developer")
+        variants.add("Golang Developer")
+    if "typescript" in core_lower:
+        variants.add("TypeScript Developer")
 
-    # Generic variants
+    # Backend-heavy profile detection
+    backend_skills = {"java", "spring boot", "spring", "node.js", "django",
+                      "flask", "go", "golang", "python", "rest api",
+                      "microservices", "kafka", "redis", "postgresql", "mysql"}
+    backend_count = sum(1 for s in core_lower if s in backend_skills)
+    if backend_count >= 3:
+        variants.add("Backend Developer")
+        variants.add("Backend Engineer")
+
+    # Frontend-heavy profile detection
+    frontend_skills = {"react", "angular", "vue", "html", "css", "tailwind",
+                       "javascript", "typescript", "next.js", "redux"}
+    frontend_count = sum(1 for s in core_lower if s in frontend_skills)
+    if frontend_count >= 3:
+        variants.add("Frontend Developer")
+        variants.add("Frontend Engineer")
+
+    # Generic variants (always added)
     variants.add("Software Engineer")
     variants.add("Software Developer")
     variants.add("Web Developer")
@@ -472,7 +496,7 @@ def _generate_role_variants(primary_role, core_skills):
     # Remove the primary role from variants
     variants.discard(primary_role)
 
-    return list(variants)[:8]
+    return list(variants)[:10]  # Increased from 8 to 10
 
 
 # ============================================================
