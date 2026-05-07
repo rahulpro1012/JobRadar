@@ -8,6 +8,7 @@ Lever API:      GET https://api.lever.co/v0/postings/{company}?mode=json
 """
 import re
 import json
+import html
 import time
 import logging
 from urllib.parse import urlparse
@@ -135,7 +136,9 @@ def fetch_greenhouse_jobs(profile, delay=0.5):
                     continue
 
                 # Build clean description snippet
-                desc = re.sub(r"<[^>]+>", " ", content)
+                desc = html.unescape(content)
+                desc = re.sub(r"<[^>]+>", " ", desc)
+
                 desc = re.sub(r"\s+", " ", desc).strip()[:300]
 
                 all_jobs.append({

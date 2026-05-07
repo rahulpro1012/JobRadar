@@ -141,10 +141,10 @@ def fetch_all_jobs(profile, config):
                 all_jobs.extend(jobs)
 
     # ── Layer 9: DuckDuckGo (free, fallback) ──
-    logger.info("Layer 9: Fetching from DuckDuckGo...")
-    for q in queries[:3]:
-        jobs = _fetch_from_duckduckgo(q["query"], scrape_delay)
-        all_jobs.extend(jobs)
+    # logger.info("Layer 9: Fetching from DuckDuckGo...")
+    # for q in queries[:3]:
+    #     jobs = _fetch_from_duckduckgo(q["query"], scrape_delay)
+    #     all_jobs.extend(jobs)
 
     # Store new jobs in database
     new_count = _store_jobs(all_jobs)
@@ -482,6 +482,25 @@ def _parse_search_result(title, url, snippet=""):
         "course", "certification", "resume template",
     ]
     if any(kw in title_lower for kw in skip_keywords):
+        return None
+
+    # Reject search result pages / aggregation titles
+    garbage_patterns = [
+        r"\d+\+?\s*(?:full stack|java|react|developer|engineer|software)",  # "1,000+ Full Stack Developer"
+        r"(?:jobs|vacancies|openings)\s+(?:in|at|near)\s+",  # "jobs in Pune"
+        r"freelance.*contractor.*jobs",  # "Freelance Contractor Jobs"
+        r"(?:latest|new|top|best)\s+\d+",  # "Latest 500 jobs"
+        r"(?:apply to|explore|browse)\s+\d+",  # "Apply to 200+ jobs"
+    ]
+    if any(re.search(p, title_lower) for p in garbage_patterns):
+        return None
+    
+    # Reject aggregation/listing page titles
+    if re.search(r"\d{2,}[+,]?\s*(?:full|java|react|spring|developer|engineer|software|backend|frontend)", title_lower):
+        return None
+    if re.search(r"(?:urgent|latest|new|top|best|apply)[\s!]*(?:full|java|react|developer|engineer|software|jobs)", title_lower):
+        return None
+    if re.search(r"jobs?\s+(?:in|at|near|for)\s+\w+", title_lower) and not re.search(r"at\s+[A-Z]", title):
         return None
 
     # Must have a role keyword
