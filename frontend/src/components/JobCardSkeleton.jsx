@@ -18,7 +18,7 @@ export default function JobCardSkeleton({ count = 3 }) {
               </div>
               <div className="skeleton h-4 w-full mb-1" />
               <div className="skeleton h-4 w-3/4 mb-3" />
-              <div className="flex gap-2 pt-2 border-t border-surface-800">
+              <div className="flex gap-2 pt-2 border-t border-themed">
                 <div className="skeleton h-8 w-20 rounded-lg" />
                 <div className="skeleton h-8 w-16 rounded-lg" />
                 <div className="skeleton h-8 w-16 rounded-lg" />

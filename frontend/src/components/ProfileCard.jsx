@@ -21,40 +21,34 @@ export default function ProfileCard({ profile, onProfileUpdate }) {
   };
 
   return (
-    <div className="card px-5 py-4 mb-5 border-surface-800 bg-gradient-to-r from-surface-900 to-surface-900/50">
+    <div className="card px-5 py-4 mb-5">
       <div className="flex flex-wrap items-center gap-x-5 gap-y-2 mb-3">
         {profile.name && (
           <div className="flex items-center gap-2">
             <User className="w-4 h-4 text-brand-500" />
-            <span className="font-semibold text-surface-100">{profile.name}</span>
+            <span className="font-semibold t-primary">{profile.name}</span>
           </div>
         )}
         <div className="flex items-center gap-2">
-          <Briefcase className="w-4 h-4 text-brand-400" />
-          <span className="text-sm font-medium text-brand-400">{profile.primary_role}</span>
+          <Briefcase className="w-4 h-4 text-brand-500" />
+          <span className="text-sm font-medium text-brand-600 dark:text-brand-400">{profile.primary_role}</span>
         </div>
-        <span className="text-sm text-surface-500">
+        <span className="text-sm t-muted">
           {profile.experience_years}yr · {profile.experience_level}
         </span>
         <div className="flex items-center gap-1.5">
-          <MapPin className="w-3.5 h-3.5 text-surface-500" />
+          <MapPin className="w-3.5 h-3.5 t-faint" />
           {editing ? (
             <div className="flex items-center gap-1">
-              <input
-                className="input py-0.5 px-2 text-sm w-28"
-                value={editLocation}
+              <input className="input py-0.5 px-2 text-sm w-28" value={editLocation}
                 onChange={(e) => setEditLocation(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleSaveLocation()}
-                autoFocus
-              />
-              <button onClick={handleSaveLocation} className="text-xs text-brand-400 font-medium">Save</button>
-              <button onClick={() => setEditing(false)} className="text-xs text-surface-500">Cancel</button>
+                onKeyDown={(e) => e.key === 'Enter' && handleSaveLocation()} autoFocus />
+              <button onClick={handleSaveLocation} className="text-xs text-brand-600 dark:text-brand-400 font-medium">Save</button>
+              <button onClick={() => setEditing(false)} className="text-xs t-faint">Cancel</button>
             </div>
           ) : (
-            <button
-              onClick={() => { setEditLocation(profile.location || ''); setEditing(true); }}
-              className="flex items-center gap-1 text-sm text-surface-400 hover:text-brand-400 transition-colors"
-            >
+            <button onClick={() => { setEditLocation(profile.location || ''); setEditing(true); }}
+              className="flex items-center gap-1 text-sm t-muted hover:text-brand-500 transition-colors">
               {profile.location || 'Set location'}
               <Pencil className="w-3 h-3 opacity-50" />
             </button>
@@ -62,22 +56,15 @@ export default function ProfileCard({ profile, onProfileUpdate }) {
         </div>
         {profile.education && (
           <div className="flex items-center gap-1.5">
-            <GraduationCap className="w-3.5 h-3.5 text-surface-500" />
-            <span className="text-sm text-surface-500">{profile.education}</span>
+            <GraduationCap className="w-3.5 h-3.5 t-faint" />
+            <span className="text-sm t-muted">{profile.education}</span>
           </div>
         )}
       </div>
-
       <div className="flex flex-wrap gap-1.5">
-        {core.slice(0, 8).map((s) => (
-          <span key={s} className="skill-tag">{s}</span>
-        ))}
-        {secondary.slice(0, 4).map((s) => (
-          <span key={s} className="skill-tag-secondary">{s}</span>
-        ))}
-        {tools.slice(0, 3).map((s) => (
-          <span key={s} className="skill-tag-tool">{s}</span>
-        ))}
+        {core.slice(0, 8).map((s) => (<span key={s} className="skill-tag">{s}</span>))}
+        {secondary.slice(0, 4).map((s) => (<span key={s} className="skill-tag-secondary">{s}</span>))}
+        {tools.slice(0, 3).map((s) => (<span key={s} className="skill-tag-tool">{s}</span>))}
         {core.length + secondary.length + tools.length > 15 && (
           <span className="skill-tag-secondary">+{core.length + secondary.length + tools.length - 15} more</span>
         )}

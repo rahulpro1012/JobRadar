@@ -52,19 +52,24 @@ export function sourceName(domain) {
 }
 
 export function sourceColor(domain) {
-  if (!domain || typeof domain !== 'string') return 'bg-surface-800 text-surface-400 border border-surface-700';
+  if (!domain || typeof domain !== "string")
+    return "border-themed t-muted border border-surface-700";
   const map = {
-    'naukri.com': 'bg-blue-500/15 text-blue-400 border border-blue-500/25',
-    'linkedin.com': 'bg-sky-500/15 text-sky-400 border border-sky-500/25',
-    'indeed.co.in': 'bg-purple-500/15 text-purple-400 border border-purple-500/25',
-    'indeed.com': 'bg-purple-500/15 text-purple-400 border border-purple-500/25',
-    'greenhouse.io': 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/25',
-    'lever.co': 'bg-orange-500/15 text-orange-400 border border-orange-500/25',
-    'ashbyhq.com': 'bg-pink-500/15 text-pink-400 border border-pink-500/25',
-    'jooble.org': 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/25',
-    'google.com': 'bg-yellow-500/15 text-yellow-400 border border-yellow-500/25',
+    "naukri.com": "bg-blue-500/15 text-blue-400 border border-blue-500/25",
+    "linkedin.com": "bg-sky-500/15 text-sky-400 border border-sky-500/25",
+    "indeed.co.in":
+      "bg-purple-500/15 text-purple-400 border border-purple-500/25",
+    "indeed.com":
+      "bg-purple-500/15 text-purple-400 border border-purple-500/25",
+    "greenhouse.io":
+      "bg-emerald-500/15 text-emerald-400 border border-emerald-500/25",
+    "lever.co": "bg-orange-500/15 text-orange-400 border border-orange-500/25",
+    "ashbyhq.com": "bg-pink-500/15 text-pink-400 border border-pink-500/25",
+    "jooble.org": "bg-cyan-500/15 text-cyan-400 border border-cyan-500/25",
+    "google.com":
+      "bg-yellow-500/15 text-yellow-400 border border-yellow-500/25",
   };
-  return map[domain] || 'bg-surface-800 text-surface-400 border border-surface-700';
+  return map[domain] || "border-themed t-muted border border-surface-700";
 }
 
 export function quotaPercent(used, limit) {

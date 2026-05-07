@@ -44,19 +44,29 @@ export default function SettingsPanel({ isOpen, onClose, initialTab }) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="fixed inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <div
+        className="fixed inset-0 bg-black/60 backdrop-blur-sm"
+        onClick={onClose}
+      />
       <div className="relative bg-surface-900 rounded-2xl shadow-2xl border border-surface-800 w-full max-w-2xl max-h-[80vh] overflow-hidden flex flex-col">
         <div className="flex items-center justify-between px-6 py-4 border-b border-surface-800">
-          <h2 className="font-display font-bold text-lg text-surface-100">Settings</h2>
-          <button onClick={onClose} className="btn-ghost p-1.5"><X className="w-5 h-5" /></button>
+          <h2 className="font-display font-bold text-lg t-primary">Settings</h2>
+          <button onClick={onClose} className="btn-ghost p-1.5">
+            <X className="w-5 h-5" />
+          </button>
         </div>
 
         <div className="flex border-b border-surface-800 px-6">
           {SETTING_TABS.map((t) => (
-            <button key={t.key} onClick={() => setTab(t.key)}
+            <button
+              key={t.key}
+              onClick={() => setTab(t.key)}
               className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
-                tab === t.key ? 'border-brand-500 text-brand-400' : 'border-transparent text-surface-500 hover:text-surface-300'
-              }`}>
+                tab === t.key
+                  ? "border-brand-500 text-brand-400"
+                  : "border-transparent t-primary0 hover:t-secondary"
+              }`}
+            >
               <t.icon className="w-4 h-4" />
               {t.label}
             </button>
@@ -64,7 +74,7 @@ export default function SettingsPanel({ isOpen, onClose, initialTab }) {
         </div>
 
         <div className="flex-1 overflow-y-auto p-6">
-          {tab === 'quota' && quota && (
+          {tab === "quota" && quota && (
             <div className="space-y-4">
               {Object.entries(quota).map(([key, q]) => {
                 const pct = quotaPercent(q.used, q.daily_limit);
@@ -72,15 +82,28 @@ export default function SettingsPanel({ isOpen, onClose, initialTab }) {
                 return (
                   <div key={key}>
                     <div className="flex justify-between text-sm mb-1">
-                      <span className="font-medium text-surface-300">{q.source}</span>
-                      <span className="text-surface-500">
-                        {isUnlimited ? `${q.used} calls (unlimited)` : `${q.used} / ${q.daily_limit}`}
+                      <span className="font-medium t-secondary">
+                        {q.source}
+                      </span>
+                      <span className="t-primary0">
+                        {isUnlimited
+                          ? `${q.used} calls (unlimited)`
+                          : `${q.used} / ${q.daily_limit}`}
                       </span>
                     </div>
-                    <div className="h-1.5 bg-surface-800 rounded-full overflow-hidden">
-                      <div className={`h-full rounded-full transition-all ${
-                        pct > 80 ? 'bg-red-500' : pct > 50 ? 'bg-amber-500' : 'bg-brand-500'
-                      }`} style={{ width: isUnlimited ? '5%' : `${Math.max(2, pct)}%` }} />
+                    <div className="h-1.5 border-themed rounded-full overflow-hidden">
+                      <div
+                        className={`h-full rounded-full transition-all ${
+                          pct > 80
+                            ? "bg-red-500"
+                            : pct > 50
+                            ? "bg-amber-500"
+                            : "bg-brand-500"
+                        }`}
+                        style={{
+                          width: isUnlimited ? "5%" : `${Math.max(2, pct)}%`,
+                        }}
+                      />
                     </div>
                   </div>
                 );
@@ -88,27 +111,76 @@ export default function SettingsPanel({ isOpen, onClose, initialTab }) {
             </div>
           )}
 
-          {tab === 'companies' && (
+          {tab === "companies" && (
             <div className="space-y-4">
               <div className="flex gap-2">
-                <input className="input flex-1" placeholder="Company name" value={newCompany.company_name}
-                  onChange={(e) => setNewCompany({ ...newCompany, company_name: e.target.value })} />
-                <input className="input flex-[2]" placeholder="Careers page URL" value={newCompany.careers_url}
-                  onChange={(e) => setNewCompany({ ...newCompany, careers_url: e.target.value })} />
-                <button onClick={handleAddCompany} className="btn-primary shrink-0"><Plus className="w-4 h-4" /></button>
+                <input
+                  className="input flex-1"
+                  placeholder="Company name"
+                  value={newCompany.company_name}
+                  onChange={(e) =>
+                    setNewCompany({
+                      ...newCompany,
+                      company_name: e.target.value,
+                    })
+                  }
+                />
+                <input
+                  className="input flex-[2]"
+                  placeholder="Careers page URL"
+                  value={newCompany.careers_url}
+                  onChange={(e) =>
+                    setNewCompany({
+                      ...newCompany,
+                      careers_url: e.target.value,
+                    })
+                  }
+                />
+                <button
+                  onClick={handleAddCompany}
+                  className="btn-primary shrink-0"
+                >
+                  <Plus className="w-4 h-4" />
+                </button>
               </div>
               <div className="space-y-2">
                 {companies.map((c) => (
-                  <div key={c.id} className="flex items-center gap-3 py-2 px-3 rounded-lg bg-surface-800/50 border border-surface-800">
-                    <button onClick={async () => { await api.toggleCompany(c.id); loadData(); }} className="shrink-0">
-                      {c.enabled ? <ToggleRight className="w-5 h-5 text-brand-500" /> : <ToggleLeft className="w-5 h-5 text-surface-600" />}
+                  <div
+                    key={c.id}
+                    className="flex items-center gap-3 py-2 px-3 rounded-lg border-themed/50 border border-surface-800"
+                  >
+                    <button
+                      onClick={async () => {
+                        await api.toggleCompany(c.id);
+                        loadData();
+                      }}
+                      className="shrink-0"
+                    >
+                      {c.enabled ? (
+                        <ToggleRight className="w-5 h-5 text-brand-500" />
+                      ) : (
+                        <ToggleLeft className="w-5 h-5 t-faint" />
+                      )}
                     </button>
                     <div className="flex-1 min-w-0">
-                      <p className={`text-sm font-medium ${c.enabled ? 'text-surface-200' : 'text-surface-500'}`}>{c.company_name}</p>
-                      <p className="text-xs text-surface-600 truncate">{c.careers_url}</p>
+                      <p
+                        className={`text-sm font-medium ${
+                          c.enabled ? "t-secondary" : "t-primary0"
+                        }`}
+                      >
+                        {c.company_name}
+                      </p>
+                      <p className="text-xs t-faint truncate">
+                        {c.careers_url}
+                      </p>
                     </div>
-                    <button onClick={async () => { await api.removeCompany(c.id); loadData(); }}
-                      className="btn-ghost p-1.5 text-red-400 hover:bg-red-500/10">
+                    <button
+                      onClick={async () => {
+                        await api.removeCompany(c.id);
+                        loadData();
+                      }}
+                      className="btn-ghost p-1.5 text-red-400 hover:bg-red-500/10"
+                    >
                       <Trash2 className="w-4 h-4" />
                     </button>
                   </div>
@@ -117,36 +189,60 @@ export default function SettingsPanel({ isOpen, onClose, initialTab }) {
             </div>
           )}
 
-          {tab === 'blacklist' && (
+          {tab === "blacklist" && (
             <div className="space-y-4">
               <div className="flex gap-2">
-                <select className="input w-36" value={newBlock.type}
-                  onChange={(e) => setNewBlock({ ...newBlock, type: e.target.value })}>
+                <select
+                  className="input w-36"
+                  value={newBlock.type}
+                  onChange={(e) =>
+                    setNewBlock({ ...newBlock, type: e.target.value })
+                  }
+                >
                   <option value="domain">Domain</option>
                   <option value="company">Company</option>
                   <option value="keyword">Keyword</option>
                 </select>
-                <input className="input flex-1" placeholder={`Enter ${newBlock.type} to block...`}
-                  value={newBlock.value} onChange={(e) => setNewBlock({ ...newBlock, value: e.target.value })}
-                  onKeyDown={(e) => e.key === 'Enter' && handleAddBlock()} />
-                <button onClick={handleAddBlock} className="btn-danger shrink-0">
+                <input
+                  className="input flex-1"
+                  placeholder={`Enter ${newBlock.type} to block...`}
+                  value={newBlock.value}
+                  onChange={(e) =>
+                    setNewBlock({ ...newBlock, value: e.target.value })
+                  }
+                  onKeyDown={(e) => e.key === "Enter" && handleAddBlock()}
+                />
+                <button
+                  onClick={handleAddBlock}
+                  className="btn-danger shrink-0"
+                >
                   <Ban className="w-4 h-4" /> Block
                 </button>
               </div>
-              {['domain', 'company', 'keyword'].map((type) => {
+              {["domain", "company", "keyword"].map((type) => {
                 const items = blacklist.grouped?.[type] || [];
                 if (items.length === 0) return null;
                 return (
                   <div key={type}>
-                    <p className="text-xs font-medium text-surface-500 uppercase tracking-wider mb-2">
+                    <p className="text-xs font-medium t-primary0 uppercase tracking-wider mb-2">
                       Blocked {type}s ({items.length})
                     </p>
                     <div className="space-y-1">
                       {items.map((entry) => (
-                        <div key={entry.id} className="flex items-center justify-between py-1.5 px-3 rounded-lg bg-red-500/10 border border-red-500/20">
-                          <span className="text-sm text-red-400">{entry.value}</span>
-                          <button onClick={async () => { await api.removeBlacklistEntry(entry.id); loadData(); }}
-                            className="text-red-500/50 hover:text-red-400">
+                        <div
+                          key={entry.id}
+                          className="flex items-center justify-between py-1.5 px-3 rounded-lg bg-red-500/10 border border-red-500/20"
+                        >
+                          <span className="text-sm text-red-400">
+                            {entry.value}
+                          </span>
+                          <button
+                            onClick={async () => {
+                              await api.removeBlacklistEntry(entry.id);
+                              loadData();
+                            }}
+                            className="text-red-500/50 hover:text-red-400"
+                          >
                             <X className="w-4 h-4" />
                           </button>
                         </div>
@@ -158,14 +254,21 @@ export default function SettingsPanel({ isOpen, onClose, initialTab }) {
             </div>
           )}
 
-          {tab === 'preferences' && (
+          {tab === "preferences" && (
             <div className="space-y-4">
-              <p className="text-sm text-surface-500">
-                JobRadar learns from your Apply, Save, and Skip actions to improve recommendations over time.
+              <p className="text-sm t-primary0">
+                JobRadar learns from your Apply, Save, and Skip actions to
+                improve recommendations over time.
               </p>
-              <button onClick={async () => {
-                if (window.confirm('Reset all preferences?')) { await api.resetPreferences(); alert('Reset done.'); }
-              }} className="btn-danger">
+              <button
+                onClick={async () => {
+                  if (window.confirm("Reset all preferences?")) {
+                    await api.resetPreferences();
+                    alert("Reset done.");
+                  }
+                }}
+                className="btn-danger"
+              >
                 <RotateCcw className="w-4 h-4" /> Reset All Preferences
               </button>
             </div>
