@@ -1,23 +1,13 @@
 """
-JobRadar Query Engine
-Generates tiered search queries from a parsed resume profile.
-Produces 8-12 targeted queries across 3 tiers of specificity.
+JobRadar Query Engine (AI-Enhanced)
+Generates tiered search queries + merges AI-generated queries.
 """
 
 
-def generate_queries(profile):
+def generate_queries(profile, ai_queries=None):
     """
-    Generate a query matrix from a parsed profile.
-
-    Args:
-        profile: dict with keys like primary_role, core_skills,
-                 role_variants, location, experience_years, etc.
-
-    Returns:
-        list of dicts, each with:
-            - query: str (the search string)
-            - tier: int (1=exact, 2=skill combo, 3=variant)
-            - site: str or None (for site-scoped queries)
+    Generate query matrix from profile + optional AI queries.
+    AI queries are added as Tier 2 (medium priority).
     """
     role = profile.get("primary_role", "Software Developer")
     core_skills = profile.get("core_skills", [])
@@ -25,7 +15,6 @@ def generate_queries(profile):
     location = profile.get("location", "")
     exp_years = profile.get("experience_years", 0)
 
-    # Parse skills from JSON if needed
     if isinstance(core_skills, str):
         import json
         try:
@@ -46,20 +35,18 @@ def generate_queries(profile):
     seen = set()
 
     def _add(query_text, tier):
-        """Add query if not duplicate."""
         normalized = query_text.lower().strip()
         if normalized not in seen:
             seen.add(normalized)
             queries.append({"query": query_text, "tier": tier})
 
-    # ── Tier 1: Exact match (role + location + experience) ──
+    # ── Tier 1: Exact match ──
     if loc:
         _add(f'"{role}" {exp_range} years {loc}', 1)
         _add(f'"{role}" {loc}', 1)
     else:
         _add(f'"{role}" {exp_range} years', 1)
 
-    # Add top skill with role
     if core_skills:
         top_skill = core_skills[0]
         if loc:
@@ -67,9 +54,8 @@ def generate_queries(profile):
         else:
             _add(f'"{top_skill} {_role_word(role)}"', 1)
 
-    # ── Tier 2: Skill combination queries ──
+    # ── Tier 2: Skill combinations ──
     if len(core_skills) >= 2:
-        # Pair top skills
         for i in range(min(3, len(core_skills))):
             for j in range(i + 1, min(4, len(core_skills))):
                 s1, s2 = core_skills[i], core_skills[j]
@@ -78,14 +64,18 @@ def generate_queries(profile):
                     q += f" {loc}"
                 _add(q, 2)
 
-    # Single strong skill + developer
     for skill in core_skills[:3]:
         q = f"{skill} developer jobs"
         if loc:
             q += f" {loc}"
         _add(q, 2)
 
-    # ── Tier 3: Role variants (broader net) ──
+    # ── AI-generated queries (Tier 2, merged in) ──
+    if ai_queries:
+        for aq in ai_queries[:6]:
+            _add(aq, 2)
+
+    # ── Tier 3: Role variants ──
     for variant in variants[:4]:
         q = variant
         if loc:
@@ -94,30 +84,16 @@ def generate_queries(profile):
             q += f" {core_skills[0]}"
         _add(q, 3)
 
-    # Generic fallback
     if loc and core_skills:
         _add(f"software developer {core_skills[0]} jobs {loc}", 3)
 
-    return queries[:12]  # Cap at 12 queries
+    return queries[:15]  # Increased cap to accommodate AI queries
 
 
 def generate_site_queries(queries, sites=None):
-    """
-    Expand queries with site: prefixes for Google/Bing search.
-
-    Args:
-        queries: list from generate_queries()
-        sites: list of domains to scope, e.g. ["naukri.com", "linkedin.com/jobs"]
-
-    Returns:
-        list of dicts with added 'site_query' and 'site' fields
-    """
+    """Expand queries with site: prefixes for Google/Bing."""
     if sites is None:
-        sites = [
-            "naukri.com",
-            "linkedin.com/jobs",
-            "indeed.co.in",
-        ]
+        sites = ["naukri.com", "linkedin.com/jobs", "indeed.co.in"]
 
     site_queries = []
     for q in queries:
@@ -128,18 +104,11 @@ def generate_site_queries(queries, sites=None):
                 "site": site,
                 "tier": q["tier"],
             })
-
     return site_queries
 
 
 def generate_rss_urls(profile):
-    """
-    Generate Indeed RSS feed URLs from profile.
-    Indeed RSS format: https://www.indeed.co.in/rss?q=QUERY&l=LOCATION
-
-    Returns:
-        list of RSS URL strings
-    """
+    """Generate Indeed RSS feed URLs."""
     role = profile.get("primary_role", "Software Developer")
     core_skills = profile.get("core_skills", [])
     location = profile.get("location", "")
@@ -154,12 +123,10 @@ def generate_rss_urls(profile):
     urls = []
     base = "https://www.indeed.co.in/rss"
 
-    # Role-based RSS
     q = role.replace(" ", "+")
     loc = location.replace(" ", "+") if location else ""
     urls.append(f"{base}?q={q}&l={loc}&sort=date")
 
-    # Top skills RSS
     for skill in core_skills[:3]:
         sq = f"{skill}+developer".replace(" ", "+")
         urls.append(f"{base}?q={sq}&l={loc}&sort=date")
@@ -168,14 +135,12 @@ def generate_rss_urls(profile):
 
 
 def _role_word(role):
-    """Extract the role noun (Developer/Engineer) from a role title."""
     if "engineer" in role.lower():
         return "Engineer"
     return "Developer"
 
 
 def _experience_range_str(years):
-    """Convert years to a search-friendly range string."""
     if years < 1:
         return "0-1"
     elif years < 3:

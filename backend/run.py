@@ -3,6 +3,15 @@ JobRadar — Main entry point.
 Run with: python run.py
 Or with gunicorn: gunicorn 'app:create_app()'
 """
+from dotenv import load_dotenv
+load_dotenv()
+
+import logging
+logging.basicConfig(level=logging.INFO)
+
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
 from app import create_app
 
 app = create_app()

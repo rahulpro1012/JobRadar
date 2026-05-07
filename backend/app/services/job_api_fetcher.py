@@ -64,7 +64,7 @@ def fetch_jooble_jobs(profile, api_key, delay=1.0):
         try:
             payload = {
                 "keywords": query,
-                "location": location,
+                "location": "India",
                 "page": 1,
             }
 

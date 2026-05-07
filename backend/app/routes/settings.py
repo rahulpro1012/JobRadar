@@ -17,6 +17,36 @@ def get_quota():
     today = datetime.now().strftime("%Y-%m-%d")
     
     quotas = {
+        "greenhouse": {
+            "used": get_quota_usage("greenhouse", today),
+            "daily_limit": -1,
+            "source": "Greenhouse API (free, no limit)"
+        },
+        "lever": {
+            "used": get_quota_usage("lever", today),
+            "daily_limit": -1,
+            "source": "Lever API (free, no limit)"
+        },
+        "jooble": {
+            "used": get_quota_usage("jooble", today),
+            "daily_limit": -1,
+            "source": "Jooble API (free tier)"
+        },
+        "rss": {
+            "used": get_quota_usage("rss", today),
+            "daily_limit": -1,
+            "source": "Indeed RSS (free, no limit)"
+        },
+        "serpapi": {
+            "used": get_quota_usage("serpapi", today),
+            "daily_limit": 3,  # ~100/month = ~3/day
+            "source": "SerpApi Google Jobs (100/month)"
+        },
+        "direct_scrape": {
+            "used": get_quota_usage("direct_scrape", today),
+            "daily_limit": -1,
+            "source": "Career Page Search URLs"
+        },
         "google_cse": {
             "used": get_quota_usage("google_cse", today),
             "daily_limit": 100,
@@ -24,29 +54,14 @@ def get_quota():
         },
         "bing": {
             "used": get_quota_usage("bing", today),
-            "daily_limit": 33,  # ~1000/month
+            "daily_limit": 33,
             "source": "Bing Web Search API"
         },
         "duckduckgo": {
             "used": get_quota_usage("duckduckgo", today),
-            "daily_limit": -1,  # unlimited
-            "source": "DuckDuckGo API"
+            "daily_limit": -1,
+            "source": "DuckDuckGo (free, no limit)"
         },
-        "rss": {
-            "used": get_quota_usage("rss", today),
-            "daily_limit": -1,  # unlimited
-            "source": "RSS Feeds (Indeed)"
-        },
-        "direct_scrape": {
-            "used": get_quota_usage("direct_scrape", today),
-            "daily_limit": -1,  # unlimited
-            "source": "Direct Career Page Scraping"
-        },
-        "google_scrape": {
-            "used": get_quota_usage("google_scrape", today),
-            "daily_limit": 60,  # approximate safe limit
-            "source": "Google Scrape Fallback"
-        }
     }
     
     return jsonify({

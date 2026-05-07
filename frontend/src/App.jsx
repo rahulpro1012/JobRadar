@@ -35,6 +35,7 @@ export default function App() {
     days: 0,
   });
   const [pagination, setPagination] = useState({ page: 1, pages: 1, total: 0 });
+  const [currentPage, setCurrentPage] = useState(1);
 
   const fileRef = useRef(null);
 
@@ -46,7 +47,7 @@ export default function App() {
   // ── Reload jobs on tab/filter change ──
   useEffect(() => {
     if (connected) loadJobs();
-  }, [activeTab, filters, connected]);
+  }, [activeTab, filters, connected, currentPage]);
 
   // ── Wake up Render backend ──
   const wakeUpBackend = async () => {
@@ -66,7 +67,7 @@ export default function App() {
       }
     }
     setWaking(false);
-    toast.error('Could not connect to backend. Please refresh the page.');
+    toast.error("Could not connect to backend. Please refresh the page.");
   };
 
   // ── Load all initial data ──
@@ -81,7 +82,7 @@ export default function App() {
       }
       await Promise.all([loadJobs(), loadStats(), loadBlacklistCount()]);
     } catch (err) {
-      console.error('Init error:', err);
+      console.error("Init error:", err);
     } finally {
       setLoading(false);
     }
@@ -90,8 +91,8 @@ export default function App() {
   // ── Load jobs with current filters ──
   const loadJobs = async () => {
     try {
-      const params = { page: pagination.page, per_page: 20 };
-      if (activeTab !== 'all') params.status = activeTab;
+      const params = { page: currentPage, per_page: 20 };
+      if (activeTab !== "all") params.status = activeTab;
       if (filters.minScore > 0) params.min_score = filters.minScore;
       if (filters.days > 0) params.days = filters.days;
       if (filters.sources?.length > 0) params.source = filters.sources[0];
@@ -100,7 +101,7 @@ export default function App() {
       setJobs(res.data.jobs);
       setPagination(res.data.pagination);
     } catch (err) {
-      console.error('Load jobs error:', err);
+      console.error("Load jobs error:", err);
     }
   };
 
@@ -123,9 +124,9 @@ export default function App() {
     try {
       const res = await api.uploadResume(file);
       setProfile(res.data.profile);
-      toast.success('Resume parsed successfully!');
+      toast.success("Resume parsed successfully!");
     } catch (err) {
-      toast.error(err.response?.data?.error || 'Upload failed');
+      toast.error(err.response?.data?.error || "Upload failed");
     }
   };
 
@@ -142,9 +143,9 @@ export default function App() {
       if (d.deduplicated > 0) parts.push(`${d.deduplicated} deduped`);
       if (d.scored > 0) parts.push(`${d.scored} scored`);
 
-      toast.success(parts.length > 0 ? parts.join(' · ') : 'No new jobs found');
+      toast.success(parts.length > 0 ? parts.join(" · ") : "No new jobs found");
     } catch (err) {
-      toast.error(err.response?.data?.error || 'Refresh failed');
+      toast.error(err.response?.data?.error || "Refresh failed");
     } finally {
       setRefreshing(false);
     }
@@ -157,14 +158,14 @@ export default function App() {
         prev.map((j) => (j.id === jobId ? { ...j, status } : j))
       );
       loadStats();
-      if (status === 'applied') toast.success('Marked as applied');
-      if (status === 'saved') toast.info('Job saved');
+      if (status === "applied") toast.success("Marked as applied");
+      if (status === "saved") toast.info("Job saved");
     } catch {}
   };
 
   const handleBlockSource = async (domain) => {
     try {
-      await api.addBlacklistEntry('domain', domain);
+      await api.addBlacklistEntry("domain", domain);
       loadBlacklistCount();
       loadJobs();
       toast.info(`Blocked source: ${domain}`);
@@ -173,7 +174,7 @@ export default function App() {
 
   const handleBlockCompany = async (company) => {
     try {
-      await api.addBlacklistEntry('company', company.toLowerCase());
+      await api.addBlacklistEntry("company", company.toLowerCase());
       loadBlacklistCount();
       loadJobs();
       toast.info(`Blocked company: ${company}`);
@@ -181,8 +182,8 @@ export default function App() {
   };
 
   const handlePageChange = (page) => {
-    setPagination((prev) => ({ ...prev, page }));
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    setCurrentPage(page);
+    window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
   // Show wake-up screen while connecting to Render
@@ -193,7 +194,10 @@ export default function App() {
       <Navbar
         onUpload={handleUpload}
         onRefresh={handleRefresh}
-        onSettingsClick={() => { setSettingsTab('quota'); setSettingsOpen(true); }}
+        onSettingsClick={() => {
+          setSettingsTab("quota");
+          setSettingsOpen(true);
+        }}
         isRefreshing={refreshing}
         hasProfile={!!profile}
       />
@@ -213,26 +217,35 @@ export default function App() {
             filters={filters}
             onFilterChange={setFilters}
             blacklistCount={blacklistCount}
-            onManageBlacklist={() => { setSettingsTab('blacklist'); setSettingsOpen(true); }}
+            onManageBlacklist={() => {
+              setSettingsTab("blacklist");
+              setSettingsOpen(true);
+            }}
           />
 
           {/* Content */}
           <div className="flex-1 min-w-0">
             {/* No profile state */}
             {!loading && !profile && (
-              <EmptyState type="noProfile" onAction={() => fileRef.current?.click()} />
+              <EmptyState
+                type="noProfile"
+                onAction={() => fileRef.current?.click()}
+              />
             )}
 
             {/* Has profile */}
             {profile && (
               <>
-                <ProfileCard profile={profile} onProfileUpdate={(p) => setProfile(p)} />
+                <ProfileCard
+                  profile={profile}
+                  onProfileUpdate={(p) => setProfile(p)}
+                />
 
                 <TabBar
                   activeTab={activeTab}
                   onTabChange={(tab) => {
                     setActiveTab(tab);
-                    setPagination((p) => ({ ...p, page: 1 }));
+                    setCurrentPage(1);
                   }}
                   counts={stats}
                 />
@@ -267,39 +280,48 @@ export default function App() {
                 {pagination.pages > 1 && (
                   <div className="flex justify-center gap-2 mt-6 mb-4">
                     <button
-                      onClick={() => handlePageChange(Math.max(1, pagination.page - 1))}
+                      onClick={() =>
+                        handlePageChange(Math.max(1, pagination.page - 1))
+                      }
                       disabled={pagination.page <= 1}
                       className="btn-ghost text-sm"
                     >
                       Previous
                     </button>
-                    {Array.from({ length: Math.min(pagination.pages, 7) }, (_, i) => {
-                      let page;
-                      if (pagination.pages <= 7) {
-                        page = i + 1;
-                      } else if (pagination.page <= 4) {
-                        page = i + 1;
-                      } else if (pagination.page >= pagination.pages - 3) {
-                        page = pagination.pages - 6 + i;
-                      } else {
-                        page = pagination.page - 3 + i;
+                    {Array.from(
+                      { length: Math.min(pagination.pages, 7) },
+                      (_, i) => {
+                        let page;
+                        if (pagination.pages <= 7) {
+                          page = i + 1;
+                        } else if (pagination.page <= 4) {
+                          page = i + 1;
+                        } else if (pagination.page >= pagination.pages - 3) {
+                          page = pagination.pages - 6 + i;
+                        } else {
+                          page = pagination.page - 3 + i;
+                        }
+                        return (
+                          <button
+                            key={page}
+                            onClick={() => handlePageChange(page)}
+                            className={`w-9 h-9 rounded-lg text-sm font-medium transition-colors ${
+                              page === pagination.page
+                                ? "bg-brand-600 text-white"
+                                : "bg-surface-100 text-surface-600 hover:bg-surface-200"
+                            }`}
+                          >
+                            {page}
+                          </button>
+                        );
                       }
-                      return (
-                        <button
-                          key={page}
-                          onClick={() => handlePageChange(page)}
-                          className={`w-9 h-9 rounded-lg text-sm font-medium transition-colors ${
-                            page === pagination.page
-                              ? 'bg-brand-600 text-white'
-                              : 'bg-surface-100 text-surface-600 hover:bg-surface-200'
-                          }`}
-                        >
-                          {page}
-                        </button>
-                      );
-                    })}
+                    )}
                     <button
-                      onClick={() => handlePageChange(Math.min(pagination.pages, pagination.page + 1))}
+                      onClick={() =>
+                        handlePageChange(
+                          Math.min(pagination.pages, pagination.page + 1)
+                        )
+                      }
                       disabled={pagination.page >= pagination.pages}
                       className="btn-ghost text-sm"
                     >
@@ -322,7 +344,7 @@ export default function App() {
         onChange={(e) => {
           const file = e.target.files?.[0];
           if (file) handleUpload(file);
-          e.target.value = '';
+          e.target.value = "";
         }}
       />
 

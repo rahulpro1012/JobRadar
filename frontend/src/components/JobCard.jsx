@@ -32,9 +32,7 @@ export default function JobCard({ job, onStatusChange, onBlockSource, onBlockCom
         <h3 className="font-semibold text-surface-900 leading-snug line-clamp-2">
           {job.title}
         </h3>
-        <span className={`badge shrink-0 ${badge.cls}`}>
-          {score}%
-        </span>
+        <span className={`badge shrink-0 ${badge.cls}`}>{score}%</span>
       </div>
 
       {/* Company + Location */}
@@ -73,6 +71,19 @@ export default function JobCard({ job, onStatusChange, onBlockSource, onBlockCom
           {job.description_snippet}
         </p>
       )}
+      {job.ai_reason && (
+        <div className="flex items-start gap-2 mb-3 px-3 py-2 rounded-lg bg-violet-50 border border-violet-100">
+          <span className="text-sm">🤖</span>
+          <div>
+            <span className="text-xs font-semibold text-violet-700">
+              AI Analysis
+            </span>
+            <p className="text-xs text-violet-600 leading-relaxed">
+              {job.ai_reason}
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Source + Posted date */}
       <div className="flex items-center gap-2 mb-3">
@@ -81,7 +92,12 @@ export default function JobCard({ job, onStatusChange, onBlockSource, onBlockCom
         </span>
         {alsoOn.length > 0 && (
           <span className="text-xs text-surface-400">
-            also on: {alsoOn.map(sourceName).join(', ')}
+            also on:{" "}
+            {alsoOn
+              .map((a) =>
+                sourceName(typeof a === "string" ? a : a.source || "")
+              )
+              .join(", ")}
           </span>
         )}
         {job.posted_date && (
@@ -99,7 +115,7 @@ export default function JobCard({ job, onStatusChange, onBlockSource, onBlockCom
           href={job.source_url}
           target="_blank"
           rel="noopener noreferrer"
-          onClick={() => onStatusChange(job.id, 'applied')}
+          onClick={() => onStatusChange(job.id, "applied")}
           className="btn-primary text-xs py-1.5 px-3"
         >
           <ExternalLink className="w-3.5 h-3.5" />
@@ -107,9 +123,9 @@ export default function JobCard({ job, onStatusChange, onBlockSource, onBlockCom
         </a>
 
         {/* Save */}
-        {job.status !== 'saved' ? (
+        {job.status !== "saved" ? (
           <button
-            onClick={() => onStatusChange(job.id, 'saved')}
+            onClick={() => onStatusChange(job.id, "saved")}
             className="btn-ghost text-xs"
             title="Save for later"
           >
@@ -124,9 +140,9 @@ export default function JobCard({ job, onStatusChange, onBlockSource, onBlockCom
         )}
 
         {/* Skip */}
-        {job.status !== 'skipped' && (
+        {job.status !== "skipped" && (
           <button
-            onClick={() => onStatusChange(job.id, 'skipped')}
+            onClick={() => onStatusChange(job.id, "skipped")}
             className="btn-ghost text-xs"
             title="Skip this job"
           >
@@ -136,7 +152,7 @@ export default function JobCard({ job, onStatusChange, onBlockSource, onBlockCom
         )}
 
         {/* Status indicator */}
-        {job.status && job.status !== 'new' && statusIcons[job.status] && (
+        {job.status && job.status !== "new" && statusIcons[job.status] && (
           <span className="ml-auto badge bg-surface-100 text-surface-600 gap-1">
             {statusIcons[job.status]}
             {job.status}
