@@ -120,15 +120,19 @@ export default function App() {
   };
 
   // ── Actions ──
-  const handleUpload = async (file) => {
-    try {
-      const res = await api.uploadResume(file);
-      setProfile(res.data.profile);
-      toast.success("Resume parsed successfully!");
-    } catch (err) {
-      toast.error(err.response?.data?.error || "Upload failed");
-    }
-  };
+    const handleUpload = async (file) => {
+      try {
+        const res = await api.uploadResume(file);
+        setProfile(res.data.profile);
+        const method = res.data.parse_method === "ai" ? "AI" : "regex";
+        toast.success(`Resume parsed successfully (${method})`);
+
+        // Auto-trigger refresh after upload
+        handleRefresh();
+      } catch (err) {
+        toast.error(err.response?.data?.error || "Upload failed");
+      }
+    };
 
   const handleRefresh = async () => {
     setRefreshing(true);

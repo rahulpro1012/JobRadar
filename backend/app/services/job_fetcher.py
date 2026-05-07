@@ -73,6 +73,15 @@ def fetch_all_jobs(profile, config):
         all_jobs.extend(lever_jobs)
     except Exception as e:
         logger.warning(f"Lever layer failed: {e}")
+    
+    # ── Layer 2b: Ashby API (free, no key, actual jobs + salary data) ──
+    logger.info("Layer 2b: Fetching from Ashby API...")
+    try:
+        from app.services.ats_fetcher import fetch_ashby_jobs
+        ashby_jobs = fetch_ashby_jobs(profile, delay=0.5)
+        all_jobs.extend(ashby_jobs)
+    except Exception as e:
+        logger.warning(f"Ashby layer failed: {e}")
 
     # ── Layer 3: Jooble API (free, key required) ──
     jooble_key = config.get("JOOBLE_API_KEY", "")
