@@ -15,6 +15,7 @@ import ToastContainer, { toast } from './components/Toast';
 import * as api from './services/api';
 import ScrollToTop from "./components/ScrollToTop";
 import LastRefreshed from "./components/LastRefreshed";
+import ProfileEditor from "./components/ProfileEditor";
 
 export default function App() {
   const [connected, setConnected] = useState(false);
@@ -41,6 +42,8 @@ export default function App() {
       return null;
     }
   });
+  const [profileEditorOpen, setProfileEditorOpen] = useState(false);
+
   const fileRef = useRef(null);
 
   useEffect(() => {
@@ -274,7 +277,7 @@ export default function App() {
               <>
                 <ProfileCard
                   profile={profile}
-                  onProfileUpdate={(p) => setProfile(p)}
+                  onClick={() => setProfileEditorOpen(true)}
                 />
 
                 {refreshing ? (
@@ -405,6 +408,13 @@ export default function App() {
           if (f) handleUpload(f);
           e.target.value = "";
         }}
+      />
+
+      <ProfileEditor
+        isOpen={profileEditorOpen}
+        onClose={() => setProfileEditorOpen(false)}
+        profile={profile}
+        onProfileUpdate={(p) => setProfile(p)}
       />
 
       <SettingsPanel
