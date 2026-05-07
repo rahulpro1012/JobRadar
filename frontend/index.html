@@ -3,13 +3,71 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#09090B" />
-    <title>JobRadar — Your Personal Job Dashboard</title>
+    <meta name="theme-color" content="#0D9488" />
+
+    <!-- SEO Meta Tags -->
+    <title>JobRadar — AI-Powered Job Discovery Dashboard</title>
+    <meta name="description" content="JobRadar aggregates job listings from Greenhouse, Lever, Ashby, Indeed, Jooble, and 45+ companies. AI-powered resume parsing, smart matching, and relevance scoring — all for free." />
+    <meta name="keywords" content="job search, job board, job aggregator, AI job matching, resume parser, Greenhouse jobs, Lever jobs, developer jobs, full stack developer, software engineer, India jobs, Pune, Mumbai, Bangalore" />
+    <meta name="author" content="JobRadar" />
+    <meta name="robots" content="index, follow" />
+
+    <!-- Open Graph (Facebook, LinkedIn, WhatsApp) -->
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="JobRadar — AI-Powered Job Discovery Dashboard" />
+    <meta property="og:description" content="Stop scrolling through 10 job portals. JobRadar scans 45+ companies via Greenhouse, Lever, Ashby APIs + Jooble, SerpApi — scores every job against your resume. Free and open source." />
+    <meta property="og:site_name" content="JobRadar" />
+    <meta property="og:locale" content="en_IN" />
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="JobRadar — AI-Powered Job Discovery Dashboard" />
+    <meta name="twitter:description" content="AI-powered job discovery. Scans 45+ companies, scores jobs against your resume, explains why each is a match." />
+
+    <!-- Canonical URL (update when deployed) -->
+    <!-- <link rel="canonical" href="https://jobradar.vercel.app" /> -->
+
+    <!-- Favicon -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" href="/favicon.svg" />
+
+    <!-- Structured Data (JSON-LD) for Google -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "WebApplication",
+      "name": "JobRadar",
+      "description": "AI-powered job discovery dashboard that aggregates listings from multiple sources and scores them against your resume.",
+      "applicationCategory": "BusinessApplication",
+      "operatingSystem": "Web",
+      "offers": {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "USD"
+      },
+      "featureList": [
+        "Resume parsing with AI",
+        "Job aggregation from 45+ companies",
+        "Relevance scoring 0-100",
+        "Multi-source deduplication",
+        "Blacklist management",
+        "Dark and light mode"
+      ]
+    }
+    </script>
+
+    <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   </head>
-  <body class="bg-surface-950 t-secondary antialiased">
+  <body class="antialiased">
+    <noscript>
+      <div style="text-align:center;padding:40px;font-family:system-ui">
+        <h1>JobRadar</h1>
+        <p>JavaScript is required to run this application.</p>
+      </div>
+    </noscript>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>
