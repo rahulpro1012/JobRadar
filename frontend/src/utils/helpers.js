@@ -1,8 +1,7 @@
 /**
- * JobRadar utility helpers.
+ * JobRadar utility helpers — Obsidian dark theme.
  */
 
-/** Get score badge class and label */
 export function getScoreBadge(score) {
   if (score >= 80) return { cls: 'badge-excellent', label: 'Excellent Match' };
   if (score >= 60) return { cls: 'badge-good', label: 'Good Match' };
@@ -10,7 +9,6 @@ export function getScoreBadge(score) {
   return { cls: 'badge-low', label: 'Low Match' };
 }
 
-/** Format relative time (e.g., "2d ago", "5h ago") */
 export function timeAgo(dateStr) {
   if (!dateStr) return '';
   const date = new Date(dateStr);
@@ -27,45 +25,49 @@ export function timeAgo(dateStr) {
   return date.toLocaleDateString();
 }
 
-/** Extract domain from URL */
 export function extractDomain(url) {
-  try {
-    return new URL(url).hostname.replace('www.', '');
-  } catch {
-    return url;
-  }
+  try { return new URL(url).hostname.replace('www.', ''); }
+  catch { return url; }
 }
 
-/** Capitalize first letter */
 export function capitalize(str) {
   if (!str) return '';
   return str.charAt(0).toUpperCase() + str.slice(1);
 }
 
-/** Source domain to friendly name */
 export function sourceName(domain) {
+  if (!domain || typeof domain !== 'string') return 'Unknown';
   const map = {
     'naukri.com': 'Naukri',
     'linkedin.com': 'LinkedIn',
     'indeed.co.in': 'Indeed',
     'indeed.com': 'Indeed',
+    'greenhouse.io': 'Greenhouse',
+    'lever.co': 'Lever',
+    'ashbyhq.com': 'Ashby',
+    'jooble.org': 'Jooble',
+    'google.com': 'Google Jobs',
   };
   return map[domain] || capitalize(domain.split('.')[0]);
 }
 
-/** Source domain to color */
 export function sourceColor(domain) {
+  if (!domain || typeof domain !== 'string') return 'bg-surface-800 text-surface-400 border border-surface-700';
   const map = {
-    'naukri.com': 'bg-blue-100 text-blue-700',
-    'linkedin.com': 'bg-sky-100 text-sky-700',
-    'indeed.co.in': 'bg-purple-100 text-purple-700',
-    'indeed.com': 'bg-purple-100 text-purple-700',
+    'naukri.com': 'bg-blue-500/15 text-blue-400 border border-blue-500/25',
+    'linkedin.com': 'bg-sky-500/15 text-sky-400 border border-sky-500/25',
+    'indeed.co.in': 'bg-purple-500/15 text-purple-400 border border-purple-500/25',
+    'indeed.com': 'bg-purple-500/15 text-purple-400 border border-purple-500/25',
+    'greenhouse.io': 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/25',
+    'lever.co': 'bg-orange-500/15 text-orange-400 border border-orange-500/25',
+    'ashbyhq.com': 'bg-pink-500/15 text-pink-400 border border-pink-500/25',
+    'jooble.org': 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/25',
+    'google.com': 'bg-yellow-500/15 text-yellow-400 border border-yellow-500/25',
   };
-  return map[domain] || 'bg-surface-100 text-surface-600';
+  return map[domain] || 'bg-surface-800 text-surface-400 border border-surface-700';
 }
 
-/** Quota percentage */
 export function quotaPercent(used, limit) {
-  if (limit <= 0) return -1; // unlimited
+  if (limit <= 0) return -1;
   return Math.min(100, Math.round((used / limit) * 100));
 }

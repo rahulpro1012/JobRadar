@@ -4,115 +4,131 @@
 
 @layer base {
   body {
-    @apply bg-surface-50 text-surface-800 font-sans;
+    @apply bg-surface-950 text-surface-200 font-sans;
   }
+
+  /* Custom scrollbar for dark theme */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: theme('colors.surface.700'); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: theme('colors.surface.600'); }
 }
 
 @layer components {
   .btn-primary {
     @apply inline-flex items-center gap-2 px-4 py-2 rounded-lg
            bg-brand-600 text-white font-medium text-sm
-           hover:bg-brand-700 active:bg-brand-800
-           transition-colors duration-150
-           disabled:opacity-50 disabled:cursor-not-allowed;
+           hover:bg-brand-500 active:bg-brand-700
+           shadow-sm hover:shadow-glow-teal
+           transition-all duration-200
+           disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:shadow-none;
   }
 
   .btn-secondary {
     @apply inline-flex items-center gap-2 px-4 py-2 rounded-lg
-           bg-surface-100 text-surface-700 font-medium text-sm
-           border border-surface-200
-           hover:bg-surface-200 active:bg-surface-300
-           transition-colors duration-150;
+           bg-surface-800 text-surface-300 font-medium text-sm
+           border border-surface-700
+           hover:bg-surface-700 hover:text-surface-100 hover:border-surface-600
+           transition-all duration-200;
   }
 
   .btn-ghost {
     @apply inline-flex items-center gap-2 px-3 py-1.5 rounded-lg
-           text-surface-500 font-medium text-sm
-           hover:bg-surface-100 hover:text-surface-700
-           transition-colors duration-150;
+           text-surface-400 font-medium text-sm
+           hover:bg-surface-800 hover:text-surface-200
+           transition-all duration-200;
   }
 
   .btn-danger {
     @apply inline-flex items-center gap-2 px-4 py-2 rounded-lg
-           bg-red-50 text-red-700 font-medium text-sm
-           border border-red-200
-           hover:bg-red-100 active:bg-red-200
-           transition-colors duration-150;
+           bg-red-500/10 text-red-400 font-medium text-sm
+           border border-red-500/20
+           hover:bg-red-500/20 hover:text-red-300
+           transition-all duration-200;
   }
 
   .card {
-    @apply bg-white rounded-xl border border-surface-200
-           shadow-sm hover:shadow-md transition-shadow duration-200;
+    @apply bg-surface-900 rounded-xl border border-surface-800
+           shadow-card hover:shadow-card-hover
+           transition-all duration-200;
   }
 
   .badge {
     @apply inline-flex items-center px-2.5 py-0.5 rounded-full
-           text-xs font-medium;
+           text-xs font-semibold tracking-wide;
   }
 
   .badge-excellent {
-    @apply bg-emerald-50 text-emerald-700 border border-emerald-200;
+    @apply bg-emerald-500/15 text-emerald-400 border border-emerald-500/25;
   }
 
   .badge-good {
-    @apply bg-blue-50 text-blue-700 border border-blue-200;
+    @apply bg-brand-500/15 text-brand-400 border border-brand-500/25;
   }
 
   .badge-partial {
-    @apply bg-amber-50 text-amber-700 border border-amber-200;
+    @apply bg-amber-500/15 text-amber-400 border border-amber-500/25;
   }
 
   .badge-low {
-    @apply bg-surface-100 text-surface-500 border border-surface-200;
+    @apply bg-surface-700/50 text-surface-400 border border-surface-700;
   }
 
   .input {
-    @apply w-full px-3 py-2 rounded-lg border border-surface-200
-           bg-white text-surface-800 text-sm
-           placeholder:text-surface-400
-           focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500
-           transition-all duration-150;
+    @apply w-full px-3 py-2 rounded-lg
+           bg-surface-800 border border-surface-700
+           text-surface-200 text-sm
+           placeholder:text-surface-500
+           focus:outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-600
+           transition-all duration-200;
   }
 
-  .sidebar-link {
-    @apply flex items-center gap-3 px-3 py-2 rounded-lg
-           text-sm text-surface-600
-           hover:bg-surface-100 hover:text-surface-800
-           transition-colors duration-150;
+  .skill-tag {
+    @apply px-2 py-0.5 text-xs rounded-md font-medium
+           bg-brand-500/10 text-brand-400 border border-brand-500/20;
   }
 
-  .sidebar-link-active {
-    @apply bg-brand-50 text-brand-700 font-medium;
+  .skill-tag-secondary {
+    @apply px-2 py-0.5 text-xs rounded-md
+           bg-surface-800 text-surface-400 border border-surface-700;
+  }
+
+  .skill-tag-tool {
+    @apply px-2 py-0.5 text-xs rounded-md
+           bg-amber-500/10 text-amber-400 border border-amber-500/20;
   }
 }
 
-/* Custom scrollbar */
-::-webkit-scrollbar {
-  width: 6px;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-::-webkit-scrollbar-thumb {
-  background: theme('colors.surface.300');
-  border-radius: 3px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: theme('colors.surface.400');
-}
-
-/* Loading shimmer animation */
-@keyframes shimmer {
-  0% { background-position: -200% 0; }
-  100% { background-position: 200% 0; }
-}
-
-/* Toast slide-in animation */
+/* Toast animations */
 @keyframes slideIn {
   from { opacity: 0; transform: translateX(100px); }
   to { opacity: 1; transform: translateX(0); }
 }
 
+/* Radar pulse animation for loading */
+@keyframes radarPulse {
+  0% { box-shadow: 0 0 0 0 rgba(20, 184, 166, 0.4); }
+  70% { box-shadow: 0 0 0 20px rgba(20, 184, 166, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(20, 184, 166, 0); }
+}
+
+.radar-pulse {
+  animation: radarPulse 2s ease-out infinite;
+}
+
+/* Skeleton shimmer for dark theme */
 .skeleton {
-  @apply bg-surface-200 rounded animate-pulse;
+  @apply bg-surface-800 rounded;
+  background: linear-gradient(90deg, 
+    theme('colors.surface.800') 25%, 
+    theme('colors.surface.700') 50%, 
+    theme('colors.surface.800') 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
 }
