@@ -128,12 +128,18 @@ def fetch_all_jobs(profile, config):
         if remaining > 0:
             logger.info(f"Layer 7: Google CSE ({remaining} remaining)...")
             top_queries = [q for q in queries if q["tier"] <= 2][:3]
+            print(f">>> top_queries count: {len(top_queries)}")
             top_sites = ["naukri.com", "linkedin.com/jobs"]
             site_queries = generate_site_queries(top_queries, top_sites)
+            print(f">>> site_queries count: {len(site_queries)}")
             max_calls = min(8, remaining, len(site_queries))
+            print(f">>> max_calls: {max_calls}")
             for sq in site_queries[:max_calls]:
+                print(f">>> Calling Google CSE: {sq['site_query'][:80]}")
                 jobs = _fetch_from_google_cse(sq["site_query"], google_key, google_cx, scrape_delay)
                 all_jobs.extend(jobs)
+    else:
+        print(f">>> Google CSE SKIPPED: key={bool(google_key)}, cx={bool(google_cx)}")
 
     # ── Layer 8: Bing API (1000/month, max 6 per refresh) ──
     bing_key = config.get("BING_API_KEY", "")
@@ -348,11 +354,15 @@ def _fetch_from_google_cse(query, api_key, cx, delay=1.0):
         increment_quota("google_cse")
 
         if resp.status_code != 200:
+            print(f">>> Google CSE HTTP {resp.status_code}: {resp.text[:200]}")
             return []
 
         data = resp.json()
+        items = data.get("items", [])
+        print(f">>> Google CSE: {len(items)} raw results for: {query[:80]}")
+
         jobs = []
-        for item in data.get("items", []):
+        for item in items:
             parsed = _parse_search_result(
                 item.get("title", ""),
                 item.get("link", ""),
@@ -360,7 +370,10 @@ def _fetch_from_google_cse(query, api_key, cx, delay=1.0):
             )
             if parsed:
                 jobs.append(parsed)
+            else:
+                print(f">>>   FILTERED OUT: {item.get('title', '')[:60]} | {item.get('link', '')[:60]}")
 
+        print(f">>> Google CSE: {len(jobs)} kept after filtering")
         time.sleep(delay)
         return jobs
     except Exception as e:
