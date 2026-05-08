@@ -333,7 +333,7 @@ class ProfileFilter:
 # Greenhouse Fetcher
 # ============================================================
 
-def fetch_greenhouse_jobs(profile, delay=0.5):
+def fetch_greenhouse_jobs(profile, delay=0.2):
     """Fetch and filter jobs from Greenhouse companies."""
     import requests
 

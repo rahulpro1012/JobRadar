@@ -174,7 +174,7 @@ def _fetch_from_indeed_rss(profile, delay=1.0):
 
     for url in rss_urls:
         try:
-            resp = requests.get(url, timeout=15, headers={
+            resp = requests.get(url, timeout=15, verify=False, headers={
                 "User-Agent": "Mozilla/5.0 (compatible; JobRadar/1.0)"
             })
             if resp.status_code != 200:
@@ -344,7 +344,7 @@ def _fetch_from_google_cse(query, api_key, cx, delay=1.0):
     params = {"key": api_key, "cx": cx, "q": query, "num": 10}
 
     try:
-        resp = requests.get(url, params=params, timeout=15)
+        resp = requests.get(url, params=params, timeout=15, verify=False)
         increment_quota("google_cse")
 
         if resp.status_code != 200:
@@ -381,7 +381,7 @@ def _fetch_from_bing(query, api_key, delay=1.0):
     params = {"q": query, "count": 10, "mkt": "en-IN"}
 
     try:
-        resp = requests.get(url, headers=headers, params=params, timeout=15)
+        resp = requests.get(url, headers=headers, params=params, timeout=15, verify=False)
         increment_quota("bing")
 
         if resp.status_code != 200:
@@ -419,7 +419,7 @@ def _fetch_from_duckduckgo(query, delay=1.0):
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
     try:
-        resp = requests.post(url, data=data, headers=headers, timeout=15)
+        resp = requests.post(url, data=data, headers=headers, timeout=15, verify=False)
         increment_quota("duckduckgo")
 
         if resp.status_code != 200:

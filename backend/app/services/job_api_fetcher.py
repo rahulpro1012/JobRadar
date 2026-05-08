@@ -72,6 +72,7 @@ def fetch_jooble_jobs(profile, api_key, delay=1.0):
                 url,
                 json=payload,
                 timeout=15,
+                verify=False,
                 headers={"Content-Type": "application/json"},
             )
             increment_quota(JOOBLE_QUOTA_KEY)
@@ -184,6 +185,7 @@ def fetch_serpapi_jobs(profile, api_key, delay=1.0):
                 "https://serpapi.com/search",
                 params=params,
                 timeout=20,
+                verify=False,
             )
             increment_quota(SERPAPI_QUOTA_KEY, today)
 

@@ -145,12 +145,12 @@ export default function App() {
     try {
       const res = await api.refreshJobs();
       const d = res.data;
+
+      // Small delay to ensure backend has committed all data
+      await new Promise((r) => setTimeout(r, 500));
+
       await Promise.all([loadJobs(), loadStats()]);
-      const now = Date.now();
-      setLastRefreshedAt(now);
-      try {
-        window.localStorage.setItem("jobradar-last-refresh", String(now));
-      } catch {}
+
       const parts = [];
       if (d.new_jobs > 0) parts.push(`${d.new_jobs} new`);
       if (d.filtered > 0) parts.push(`${d.filtered} filtered`);
