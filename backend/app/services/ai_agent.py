@@ -1,40 +1,25 @@
 """
-JobRadar AI Agent
-Wraps Groq LLM API to provide intelligent:
-  1. Resume parsing (understands context, ranks skills by proficiency)
-  2. Query generation (creative, market-aware search queries)
-  3. Job scoring (reads full JD, explains fit, spots red flags)
-
-Uses llama-3.1-8b-instant for batched scoring (14,400 req/day limit)
-Uses llama-3.3-70b-versatile for parsing and query gen (1,000 req/day limit)
-
-Quota budget per day:
-  - Parse: 1 call (on upload only)
-  - Queries: 1 call per refresh × 5 refreshes = 5 calls
-  - Scoring: 2 calls per refresh × 5 refreshes = 10 calls
-  - Total: ~16 calls/day (1.6% of daily limit)
+JobRadar AI Agent v2
+Intelligent resume analysis, location-aware query generation, and career-advisor scoring.
+Uses Groq API with smart quota management.
 """
 import json
 import time
 import logging
 import re
+import os
 from datetime import datetime
 
 from app.database import get_quota_usage, increment_quota
 
 logger = logging.getLogger(__name__)
 
-# Models
-SMART_MODEL = "llama-3.3-70b-versatile"   # Better reasoning, 1000 RPD
-FAST_MODEL = "llama-3.1-8b-instant"       # Fast + cheap, 14400 RPD
-
-# Quota keys
+SMART_MODEL = "llama-3.3-70b-versatile"
+FAST_MODEL = "llama-3.1-8b-instant"
 QUOTA_GROQ_SMART = "groq_smart"
 QUOTA_GROQ_FAST = "groq_fast"
-
-# Daily limits (conservative — well under Groq's actual limits)
-DAILY_LIMIT_SMART = 50   # We'll use ~6/day, cap at 50 for safety
-DAILY_LIMIT_FAST = 200   # We'll use ~10/day, cap at 200 for safety
+DAILY_LIMIT_SMART = 50
+DAILY_LIMIT_FAST = 200
 
 
 # ============================================================
@@ -42,21 +27,16 @@ DAILY_LIMIT_FAST = 200   # We'll use ~10/day, cap at 200 for safety
 # ============================================================
 
 def _call_groq(prompt, system_prompt, model=FAST_MODEL, max_tokens=2000, temperature=0.3):
-    """
-    Call Groq API with rate limit awareness.
-    Returns the response text, or None if quota exceeded or error.
-    """
+    """Call Groq API with quota tracking."""
     import requests
 
-    # Determine quota key and limit
     quota_key = QUOTA_GROQ_SMART if model == SMART_MODEL else QUOTA_GROQ_FAST
     daily_limit = DAILY_LIMIT_SMART if model == SMART_MODEL else DAILY_LIMIT_FAST
-
-    # Check daily quota
     today = datetime.now().strftime("%Y-%m-%d")
     used = get_quota_usage(quota_key, today)
+
     if used >= daily_limit:
-        logger.warning(f"Groq {model} daily quota exhausted ({used}/{daily_limit})")
+        logger.warning(f"Groq {model} quota exhausted ({used}/{daily_limit})")
         return None
 
     api_key = _get_groq_key()
@@ -66,7 +46,7 @@ def _call_groq(prompt, system_prompt, model=FAST_MODEL, max_tokens=2000, tempera
     try:
         resp = requests.post(
             "https://api.groq.com/openai/v1/chat/completions",
-            verify=False,  # SSL fix for Windows — remove in production if certs are fixed
+            verify=False,
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
@@ -82,21 +62,16 @@ def _call_groq(prompt, system_prompt, model=FAST_MODEL, max_tokens=2000, tempera
             },
             timeout=30,
         )
-
         increment_quota(quota_key, today)
 
         if resp.status_code == 429:
-            logger.warning("Groq rate limited — backing off")
             time.sleep(5)
             return None
-
         if resp.status_code != 200:
             logger.warning(f"Groq API error: {resp.status_code} {resp.text[:200]}")
             return None
 
-        data = resp.json()
-        content = data["choices"][0]["message"]["content"]
-        return content.strip()
+        return resp.json()["choices"][0]["message"]["content"].strip()
 
     except Exception as e:
         logger.warning(f"Groq API call failed: {e}")
@@ -106,11 +81,9 @@ def _call_groq(prompt, system_prompt, model=FAST_MODEL, max_tokens=2000, tempera
 _groq_api_key = None
 
 def _get_groq_key():
-    """Get Groq API key from environment."""
     global _groq_api_key
     if _groq_api_key:
         return _groq_api_key
-    import os
     _groq_api_key = os.environ.get("GROQ_API_KEY", "")
     if not _groq_api_key:
         logger.info("GROQ_API_KEY not set — AI features disabled")
@@ -118,74 +91,70 @@ def _get_groq_key():
 
 
 def is_ai_enabled():
-    """Check if AI features are available."""
     return bool(_get_groq_key())
 
 
 # ============================================================
-# Feature 1: AI Resume Parser
+# Feature 1: Intelligent Resume Parsing
 # ============================================================
 
 def ai_parse_resume(resume_text):
-    """
-    Use AI to parse a resume into a structured profile.
-    Returns a dict matching our profile schema, or None if AI unavailable.
-    Falls back to regex parser if AI fails.
-    """
+    """Parse resume with career trajectory analysis."""
     if not is_ai_enabled():
         return None
 
-    system_prompt = """You are a resume parsing expert. Extract structured data from resumes.
-Return ONLY valid JSON, no markdown, no explanation. Follow this exact schema:
+    system_prompt = """You are an expert technical recruiter analyzing a developer's resume. 
+Extract structured data AND provide career intelligence. Return ONLY valid JSON:
+
 {
   "name": "Full Name",
-  "primary_role": "The single best job title this person should apply for",
-  "role_variants": ["list", "of", "6-10", "alternative", "job", "titles"],
+  "primary_role": "Best job title this person should target",
+  "role_variants": ["8-12 alternative job titles they'd be competitive for"],
   "experience_years": 2.0,
   "experience_level": "Junior|Junior-Mid|Mid|Senior|Lead",
-  "core_skills": ["top 10-15 skills ranked by proficiency, most proficient first"],
-  "secondary_skills": ["next 10-15 skills, less prominent"],
-  "tools": ["IDEs, build tools, project management tools"],
-  "domain_keywords": ["industry terms, architecture patterns, methodologies"],
+  "core_skills": ["Top 10-15 skills RANKED by evidence — skills used across multiple roles first, then single-role skills, then skills-section-only mentions"],
+  "secondary_skills": ["Next 10-15 less prominent skills"],
+  "tools": ["IDEs, build tools, platforms, project management"],
+  "domain_keywords": ["Industry domains and architecture patterns from their actual work"],
   "education": "Degree and field",
-  "location": "Current city (from address/header, NOT from past jobs)"
+  "location": "Current city from HEADER/contact section only, not from past jobs",
+  "career_narrative": "2-3 sentence summary of their career trajectory, strengths, and what makes them unique",
+  "competitive_advantages": ["3-5 specific things that make this candidate stand out at their level"],
+  "target_companies": ["Types of companies they'd be a good fit for: startup, mid-size, enterprise, product, consulting"]
 }
 
-Rules:
-- primary_role: Infer from their most recent role + skill mix. If they have both frontend and backend, say "Full Stack Developer".
-- role_variants: Include creative titles recruiters might use. E.g., for a Java+React person: "Java Full Stack Developer", "Spring Boot Developer", "Backend Engineer", "Java Developer", "React Developer", "Software Engineer", "Web Developer", "Microservices Developer".
-- core_skills: Rank by how much evidence exists (used in multiple roles > used in one role > mentioned in skills section only). Name them properly (e.g., "Spring Boot" not "spring boot").
-- location: Extract from the HEADER/contact section only (their current city), not from past employer locations.
-- experience_years: Calculate from work history dates. If "Present" appears, calculate to today (May 2026)."""
+Critical rules:
+- primary_role: Infer from most recent role + dominant skill mix
+- role_variants: Be creative — include titles recruiters actually search for. For a Java+React person: "Java Full Stack Developer", "Spring Boot Developer", "Backend Engineer", "Microservices Developer", "Java Backend Developer", "React Java Developer" etc.
+- core_skills: RANK by evidence. Skills used in 3 jobs > 2 jobs > 1 job > just listed. Name them properly (e.g., "Spring Boot" not "spring boot").
+- location: ONLY from the header/contact area, never from employer locations
+- career_narrative: What's their story? Where are they heading?
+- competitive_advantages: What's rare about their profile at their experience level?
+- Today's date is """ + datetime.now().strftime("%B %Y")
 
-    prompt = f"Parse this resume into the JSON schema:\n\n{resume_text[:4000]}"
+    prompt = f"Analyze this resume:\n\n{resume_text[:4000]}"
 
-    result = _call_groq(prompt, system_prompt, model=SMART_MODEL, max_tokens=1500, temperature=0.1)
+    result = _call_groq(prompt, system_prompt, model=SMART_MODEL, max_tokens=1800, temperature=0.1)
     if not result:
         return None
 
     try:
-        # Extract JSON from response (AI might wrap it in markdown code blocks)
         json_match = re.search(r"\{[\s\S]*\}", result)
         if not json_match:
-            logger.warning("AI resume parse: no JSON found in response")
             return None
 
         profile = json.loads(json_match.group())
 
-        # Validate required fields exist
         required = ["name", "primary_role", "core_skills"]
         for field in required:
             if field not in profile:
-                logger.warning(f"AI resume parse: missing field '{field}'")
                 return None
 
-        # Ensure lists are lists
-        for field in ["role_variants", "core_skills", "secondary_skills", "tools", "domain_keywords"]:
+        for field in ["role_variants", "core_skills", "secondary_skills", "tools",
+                      "domain_keywords", "competitive_advantages", "target_companies"]:
             if field in profile and not isinstance(profile[field], list):
                 profile[field] = []
 
-        # Ensure numbers are numbers
         if "experience_years" in profile:
             try:
                 profile["experience_years"] = float(profile["experience_years"])
@@ -196,62 +165,66 @@ Rules:
         return profile
 
     except json.JSONDecodeError as e:
-        logger.warning(f"AI resume parse: JSON decode error: {e}")
+        logger.warning(f"AI resume parse JSON error: {e}")
         return None
 
 
 # ============================================================
-# Feature 2: AI Query Generation
+# Feature 2: Location-Aware Intelligent Query Generation
 # ============================================================
 
-def ai_generate_queries(profile):
-    """
-    Use AI to generate creative, market-aware search queries.
-    Returns a list of query strings, or empty list if AI unavailable.
-    These supplement (not replace) our template-based queries.
-    """
+def ai_generate_queries(profile, search_locations=None):
+    """Generate recruiter-style queries with multi-location awareness."""
     if not is_ai_enabled():
         return []
 
-    system_prompt = """You are a job search expert for the Indian tech market.
-Given a developer's profile, generate 8-10 creative job search queries that would find relevant openings.
+    system_prompt = """You are a senior technical recruiter in India searching for candidates. 
+Given a developer's profile and their target locations, generate 12-15 highly targeted job search queries.
 
 Rules:
-- Mix specific queries ("Spring Boot microservices developer Pune") with broader ones ("Java backend engineer India")
-- Include queries using trending job titles and industry terminology
-- Consider the person's skill combinations, not just individual skills
-- Include queries that match their experience from past roles (e.g., if they worked on payment systems, try "payment backend developer")
-- Some queries should target Naukri/Indeed style searches, others should be more natural
-- Return ONLY a JSON array of strings, no explanation
+- Mix SPECIFIC queries ("Spring Boot Kafka backend engineer Pune") with DISCOVERY queries ("event-driven microservices developer India")
+- Use the candidate's UNIQUE skill combinations, not just individual skills
+- Reference their domain experience (payments, e-commerce, task management, etc.)
+- Generate queries for EACH location provided (spread across locations)
+- Include "remote" queries if remote is in the locations
+- Use terminology that appears in real job postings on Naukri, LinkedIn, Indeed
+- Include some queries targeting the candidate's competitive advantages
+- Vary query styles: some with quotes for exact match, some natural language
+- Think about what a hiring manager would type when looking for this person
 
-Example output:
-["Spring Boot microservices developer Pune", "Java React full stack 2 years India", ...]"""
+Return ONLY a JSON array of strings, no explanation."""
 
-    skills = profile.get("core_skills", [])
-    if isinstance(skills, str):
-        try:
-            skills = json.loads(skills)
-        except (json.JSONDecodeError, TypeError):
-            skills = []
-
+    skills = _parse_field(profile.get("core_skills", []))
     role = profile.get("primary_role", "Software Developer")
-    location = profile.get("location", "India")
     exp = profile.get("experience_years", 0)
-    variants = profile.get("role_variants", [])
-    if isinstance(variants, str):
-        try:
-            variants = json.loads(variants)
-        except (json.JSONDecodeError, TypeError):
-            variants = []
+    variants = _parse_field(profile.get("role_variants", []))
+    domain = _parse_field(profile.get("domain_keywords", []))
+    narrative = profile.get("career_narrative", "")
+    advantages = _parse_field(profile.get("competitive_advantages", []))
 
-    prompt = f"""Generate search queries for this developer:
+    # Build location list
+    locations = search_locations or []
+    if not locations:
+        loc = profile.get("location", "")
+        if loc:
+            locations = [loc, "India", "Remote"]
+        else:
+            locations = ["India", "Remote"]
+
+    prompt = f"""Developer Profile:
 Role: {role}
-Skills: {', '.join(skills[:10]) if isinstance(skills, list) else skills}
 Experience: {exp} years
-Location: {location}
-Alternative titles: {', '.join(variants[:5]) if isinstance(variants, list) else variants}"""
+Core Skills: {', '.join(skills[:12])}
+Role Variants: {', '.join(variants[:6])}
+Domain Experience: {', '.join(domain[:5])}
+Career Story: {narrative}
+Competitive Advantages: {', '.join(advantages[:4])}
 
-    result = _call_groq(prompt, system_prompt, model=FAST_MODEL, max_tokens=600, temperature=0.5)
+Target Locations: {', '.join(locations)}
+
+Generate 12-15 search queries optimized for Indian job portals (Naukri, LinkedIn, Indeed)."""
+
+    result = _call_groq(prompt, system_prompt, model=FAST_MODEL, max_tokens=800, temperature=0.5)
     if not result:
         return []
 
@@ -264,84 +237,72 @@ Alternative titles: {', '.join(variants[:5]) if isinstance(variants, list) else 
         if not isinstance(queries, list):
             return []
 
-        # Clean and validate
-        clean_queries = []
-        for q in queries:
-            if isinstance(q, str) and 5 < len(q) < 100:
-                clean_queries.append(q.strip())
-
-        logger.info(f"AI generated {len(clean_queries)} additional queries")
-        return clean_queries[:10]
+        clean = [q.strip() for q in queries if isinstance(q, str) and 5 < len(q) < 120]
+        logger.info(f"AI generated {len(clean)} additional queries")
+        return clean[:15]
 
     except json.JSONDecodeError:
         return []
 
 
 # ============================================================
-# Feature 3: AI Job Scoring (Batched)
+# Feature 3: Career-Advisor Job Scoring
 # ============================================================
 
 def ai_score_jobs(jobs, profile, batch_size=8):
-    """
-    Use AI to score and explain job matches in batches.
-    Returns a dict of {job_id: {"ai_score": int, "ai_reason": str}}.
-    Only processes jobs that haven't been AI-scored yet.
-    """
-    if not is_ai_enabled():
+    """Score jobs as a career advisor with actionable insights."""
+    if not is_ai_enabled() or not jobs:
         return {}
 
-    if not jobs:
-        return {}
-
-    skills = profile.get("core_skills", [])
-    if isinstance(skills, str):
-        try:
-            skills = json.loads(skills)
-        except (json.JSONDecodeError, TypeError):
-            skills = []
-
+    skills = _parse_field(profile.get("core_skills", []))
     role = profile.get("primary_role", "Software Developer")
     exp = profile.get("experience_years", 0)
     location = profile.get("location", "")
+    narrative = profile.get("career_narrative", "")
+    advantages = _parse_field(profile.get("competitive_advantages", []))
 
-    profile_summary = f"Role: {role} | Skills: {', '.join(skills[:10])} | Exp: {exp}yr | Location: {location}"
+    profile_summary = f"""Candidate: {role} | {exp}yr exp | {location}
+Skills: {', '.join(skills[:10])}
+Story: {narrative}
+Strengths: {', '.join(advantages[:3])}"""
 
-    system_prompt = f"""You are a job matching expert. Score how well each job fits this candidate:
+    system_prompt = f"""You are a career advisor evaluating job opportunities for this developer:
 
 {profile_summary}
 
-For each job, return:
-- score (0-100): How good a fit is this job for this candidate?
-- reason (1-2 sentences): Why this score? Mention skill matches, experience fit, red flags.
+For each job, provide:
+- score (0-100): How strong a match AND how good an opportunity is this?
+- reason (2 sentences max): Be specific and actionable. Mention exact skill matches, red flags, career growth potential, or why to skip.
 
 Scoring guide:
-- 80-100: Strong match — skills align, experience fits, worth applying immediately
-- 60-79: Good match — most skills align, minor gaps acceptable  
-- 40-59: Partial match — some skills match but significant gaps or overqualification
-- 0-39: Weak match — different stack, wrong level, or unrelated role
+- 85-100: "Apply immediately" — skills align perfectly, right level, good company
+- 70-84: "Strong apply" — most skills match, minor gaps they can learn
+- 50-69: "Worth considering" — partial match, some relevant experience transfers
+- 30-49: "Stretch application" — significant gaps but some overlap
+- 0-29: "Skip" — wrong stack, wrong level, or unrelated role
 
-Return ONLY valid JSON array, no explanation:
-[{{"id": 1, "score": 85, "reason": "Strong match: needs Spring Boot + React which are your core skills. 2yr experience fits."}}, ...]"""
+Be honest and direct. Mention specific skills from their profile that match or don't match.
+
+Return ONLY valid JSON array:
+[{{"id": 1, "score": 82, "reason": "Your Spring Boot + Kafka stack matches perfectly. 1-3yr range is ideal. Apply emphasizing your Boardify project."}}, ...]"""
 
     results = {}
 
-    # Process in batches
     for i in range(0, len(jobs), batch_size):
         batch = jobs[i:i + batch_size]
 
-        # Build job descriptions for the prompt
-        job_descriptions = []
-        for j, job in enumerate(batch):
-            job_desc = f"ID {job['id']}: {job['title']}"
+        job_descs = []
+        for job in batch:
+            desc = f"ID {job['id']}: {job['title']}"
             if job.get('company'):
-                job_desc += f" at {job['company']}"
+                desc += f" at {job['company']}"
             if job.get('location'):
-                job_desc += f" ({job['location']})"
+                desc += f" ({job['location']})"
             if job.get('description_snippet'):
-                job_desc += f"\n  Description: {job['description_snippet'][:200]}"
-            job_descriptions.append(job_desc)
+                desc += f"\nDescription: {job['description_snippet'][:250]}"
+            job_descs.append(desc)
 
-        prompt = f"Score these {len(batch)} jobs for the candidate:\n\n" + "\n\n".join(job_descriptions)
+        prompt = f"Evaluate these {len(batch)} jobs:\n\n" + "\n\n".join(job_descs)
 
         result = _call_groq(prompt, system_prompt, model=FAST_MODEL, max_tokens=1500, temperature=0.2)
         if not result:
@@ -356,26 +317,19 @@ Return ONLY valid JSON array, no explanation:
             if not isinstance(scores, list):
                 continue
 
-            for score_entry in scores:
-                if not isinstance(score_entry, dict):
+            for entry in scores:
+                if not isinstance(entry, dict):
                     continue
-                job_id = score_entry.get("id")
-                ai_score = score_entry.get("score", 0)
-                ai_reason = score_entry.get("reason", "")
-
+                job_id = entry.get("id")
                 if job_id is not None:
-                    # Clamp score
-                    ai_score = max(0, min(100, int(ai_score)))
                     results[int(job_id)] = {
-                        "ai_score": ai_score,
-                        "ai_reason": str(ai_reason)[:300],
+                        "ai_score": max(0, min(100, int(entry.get("score", 0)))),
+                        "ai_reason": str(entry.get("reason", ""))[:300],
                     }
 
-        except (json.JSONDecodeError, ValueError) as e:
-            logger.warning(f"AI scoring batch parse error: {e}")
+        except (json.JSONDecodeError, ValueError):
             continue
 
-        # Respect rate limits — wait between batches
         time.sleep(2)
 
     logger.info(f"AI scored {len(results)} jobs")
@@ -383,28 +337,15 @@ Return ONLY valid JSON array, no explanation:
 
 
 # ============================================================
-# Integration Functions (called from routes/services)
+# Helpers
 # ============================================================
 
-def ai_enhance_refresh(profile, new_jobs):
-    """
-    Run AI enhancements after a job refresh:
-    1. Generate additional queries (for next refresh)
-    2. Score top new jobs with AI explanations
-    
-    Returns dict with ai_queries and ai_scores.
-    """
-    result = {"ai_queries": [], "ai_scores": {}}
-
-    if not is_ai_enabled():
-        return result
-
-    # Generate additional queries for next time
-    result["ai_queries"] = ai_generate_queries(profile)
-
-    # Score top jobs (by base score, limit to 16 to use 2 batched calls)
-    if new_jobs:
-        top_jobs = sorted(new_jobs, key=lambda j: j.get("match_score", 0), reverse=True)[:16]
-        result["ai_scores"] = ai_score_jobs(top_jobs, profile)
-
-    return result
+def _parse_field(value):
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except (json.JSONDecodeError, TypeError):
+            return []
+    return []

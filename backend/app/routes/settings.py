@@ -27,40 +27,55 @@ def get_quota():
             "daily_limit": -1,
             "source": "Lever API (free, no limit)"
         },
+        "ashby": {
+            "used": get_quota_usage("ashby", today),
+            "daily_limit": -1,
+            "source": "Ashby API (free, no limit)"
+        },
         "jooble": {
             "used": get_quota_usage("jooble", today),
             "daily_limit": -1,
             "source": "Jooble API (free tier)"
         },
+        "serpapi": {
+            "used": get_quota_usage("serpapi", today),
+            "daily_limit": 3,
+            "source": "SerpApi Google Jobs (100/month)"
+        },
         "rss": {
             "used": get_quota_usage("rss", today),
             "daily_limit": -1,
-            "source": "Indeed RSS (free, no limit)"
+            "source": "Indeed RSS (free)"
         },
-        "serpapi": {
-            "used": get_quota_usage("serpapi", today),
-            "daily_limit": 3,  # ~100/month = ~3/day
-            "source": "SerpApi Google Jobs (100/month)"
+        "searxng": {
+            "used": get_quota_usage("searxng", today),
+            "daily_limit": -1,
+            "source": "SearxNG Metasearch (free)"
+        },
+        "yahoo": {
+            "used": get_quota_usage("yahoo", today),
+            "daily_limit": -1,
+            "source": "Yahoo Search (free)"
         },
         "direct_scrape": {
             "used": get_quota_usage("direct_scrape", today),
             "daily_limit": -1,
-            "source": "Career Page Search URLs"
-        },
-        "google_cse": {
-            "used": get_quota_usage("google_cse", today),
-            "daily_limit": 100,
-            "source": "Google Custom Search API"
+            "source": "Career Page URLs (free)"
         },
         "bing": {
             "used": get_quota_usage("bing", today),
             "daily_limit": 33,
             "source": "Bing Web Search API"
         },
-        "duckduckgo": {
-            "used": get_quota_usage("duckduckgo", today),
-            "daily_limit": -1,
-            "source": "DuckDuckGo (free, no limit)"
+        "groq_smart": {
+            "used": get_quota_usage("groq_smart", today),
+            "daily_limit": 50,
+            "source": "Groq AI — Smart (llama-3.3-70b)"
+        },
+        "groq_fast": {
+            "used": get_quota_usage("groq_fast", today),
+            "daily_limit": 200,
+            "source": "Groq AI — Fast (llama-3.1-8b)"
         },
     }
     
