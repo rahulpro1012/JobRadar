@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { X, Save, Cpu, FileText, ChevronDown, ChevronUp } from 'lucide-react';
+import { X, Save, Cpu, FileText, ChevronDown, ChevronUp, MapPin } from 'lucide-react';
 import TagInput from './TagInput';
 import { updateProfile } from '../services/api';
 import { toast } from './Toast';
@@ -25,6 +25,7 @@ export default function ProfileEditor({ isOpen, onClose, profile, onProfileUpdat
         tools: Array.isArray(profile.tools) ? [...profile.tools] : [],
         role_variants: Array.isArray(profile.role_variants) ? [...profile.role_variants] : [],
         domain_keywords: Array.isArray(profile.domain_keywords) ? [...profile.domain_keywords] : [],
+        search_locations: Array.isArray(profile.search_locations) ? [...profile.search_locations] : [],
       });
     }
   }, [isOpen, profile]);
@@ -63,9 +64,7 @@ export default function ProfileEditor({ isOpen, onClose, profile, onProfileUpdat
               <span className="text-xs text-violet-600 dark:text-violet-400 font-medium">{parseMethod}</span>
             </div>
           </div>
-          <button onClick={onClose} className="btn-ghost p-1.5">
-            <X className="w-5 h-5" />
-          </button>
+          <button onClick={onClose} className="btn-ghost p-1.5"><X className="w-5 h-5" /></button>
         </div>
 
         {/* Content */}
@@ -100,9 +99,10 @@ export default function ProfileEditor({ isOpen, onClose, profile, onProfileUpdat
                 </select>
               </div>
               <div>
-                <label className="text-xs t-muted mb-1 block">Location</label>
+                <label className="text-xs t-muted mb-1 block">Primary Location</label>
                 <input className="input" value={form.location || ''}
-                  onChange={(e) => setForm({ ...form, location: e.target.value })} />
+                  onChange={(e) => setForm({ ...form, location: e.target.value })}
+                  placeholder="e.g., Pune" />
               </div>
               <div>
                 <label className="text-xs t-muted mb-1 block">Education</label>
@@ -112,75 +112,86 @@ export default function ProfileEditor({ isOpen, onClose, profile, onProfileUpdat
             </div>
           </section>
 
+          {/* Search Locations */}
+          <section>
+            <div className="flex items-center gap-2 mb-1">
+              <MapPin className="w-4 h-4 text-brand-500" />
+              <h3 className="text-sm font-semibold t-secondary">Search Locations</h3>
+            </div>
+            <p className="text-xs t-faint mb-3">
+              Add cities you're open to working in. "India" and "Remote" are always included automatically.
+              The AI generates targeted queries for each location.
+            </p>
+            <TagInput
+              tags={form.search_locations || []}
+              onChange={(tags) => setForm({ ...form, search_locations: tags })}
+              placeholder="Add a city (e.g., Mumbai, Bangalore, Hyderabad)..."
+              tagClass="bg-brand-500/10 text-brand-600 dark:text-brand-400 border border-brand-500/20"
+            />
+            <div className="flex gap-2 mt-2">
+              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                India (always included)
+              </span>
+              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-violet-500/10 text-violet-600 dark:text-violet-400 border border-violet-500/20">
+                Remote (always included)
+              </span>
+            </div>
+          </section>
+
           {/* Core Skills */}
           <section>
             <h3 className="text-sm font-semibold t-secondary mb-1">Core Skills</h3>
-            <p className="text-xs t-faint mb-3">Your strongest skills — these have the highest weight in job matching.</p>
-            <TagInput
-              tags={form.core_skills || []}
+            <p className="text-xs t-faint mb-3">Your strongest skills — highest weight in job matching.</p>
+            <TagInput tags={form.core_skills || []}
               onChange={(tags) => setForm({ ...form, core_skills: tags })}
-              placeholder="Add a core skill (e.g., Spring Boot)..."
-              tagClass="skill-tag"
-            />
+              placeholder="Add a core skill (e.g., Spring Boot)..." tagClass="skill-tag" />
           </section>
 
           {/* Secondary Skills */}
           <section>
             <h3 className="text-sm font-semibold t-secondary mb-1">Secondary Skills</h3>
             <p className="text-xs t-faint mb-3">Skills you know but aren't your primary strength.</p>
-            <TagInput
-              tags={form.secondary_skills || []}
+            <TagInput tags={form.secondary_skills || []}
               onChange={(tags) => setForm({ ...form, secondary_skills: tags })}
-              placeholder="Add a secondary skill..."
-              tagClass="skill-tag-secondary"
-            />
+              placeholder="Add a secondary skill..." tagClass="skill-tag-secondary" />
           </section>
 
           {/* Tools */}
           <section>
             <h3 className="text-sm font-semibold t-secondary mb-1">Tools & Platforms</h3>
-            <p className="text-xs t-faint mb-3">IDEs, build tools, project management, and other tools you use.</p>
-            <TagInput
-              tags={form.tools || []}
+            <p className="text-xs t-faint mb-3">IDEs, build tools, platforms.</p>
+            <TagInput tags={form.tools || []}
               onChange={(tags) => setForm({ ...form, tools: tags })}
-              placeholder="Add a tool (e.g., Docker, Jira)..."
-              tagClass="skill-tag-tool"
-            />
+              placeholder="Add a tool (e.g., Docker, Jira)..." tagClass="skill-tag-tool" />
           </section>
 
           {/* Role Variants */}
           <section>
             <h3 className="text-sm font-semibold t-secondary mb-1">Search Role Variants</h3>
             <p className="text-xs t-faint mb-3">
-              Alternative job titles used to search for jobs. Add titles you'd apply for, remove ones you wouldn't.
+              Job titles used in search queries. Add titles you'd apply for, remove ones you wouldn't.
             </p>
-            <TagInput
-              tags={form.role_variants || []}
+            <TagInput tags={form.role_variants || []}
               onChange={(tags) => setForm({ ...form, role_variants: tags })}
-              placeholder="Add a role variant (e.g., Backend Engineer)..."
-              tagClass="bg-violet-500/10 text-violet-600 dark:text-violet-400 border border-violet-500/20"
-            />
+              placeholder="Add a role (e.g., Backend Engineer)..."
+              tagClass="bg-violet-500/10 text-violet-600 dark:text-violet-400 border border-violet-500/20" />
           </section>
 
           {/* Domain Keywords */}
           <section>
             <h3 className="text-sm font-semibold t-secondary mb-1">Domain Keywords</h3>
-            <p className="text-xs t-faint mb-3">Industry terms and patterns from your experience.</p>
-            <TagInput
-              tags={form.domain_keywords || []}
+            <p className="text-xs t-faint mb-3">Industry terms and patterns.</p>
+            <TagInput tags={form.domain_keywords || []}
               onChange={(tags) => setForm({ ...form, domain_keywords: tags })}
               placeholder="Add a keyword (e.g., Microservices)..."
-              tagClass="bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20"
-            />
+              tagClass="bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20" />
           </section>
 
-          {/* Raw Resume Text (collapsible) */}
+          {/* Raw Resume Text */}
           {profile.resume_text && (
             <section>
-              <button
-                onClick={() => setShowRawText(!showRawText)}
-                className="flex items-center gap-2 text-sm font-semibold t-secondary hover:t-primary transition-colors"
-              >
+              <button onClick={() => setShowRawText(!showRawText)}
+                className="flex items-center gap-2 text-sm font-semibold t-secondary hover:t-primary transition-colors">
                 <FileText className="w-4 h-4" />
                 Parsed Resume Text
                 {showRawText ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
@@ -197,14 +208,11 @@ export default function ProfileEditor({ isOpen, onClose, profile, onProfileUpdat
 
         {/* Footer */}
         <div className="flex items-center justify-between px-6 py-4 border-t border-themed">
-          <p className="text-xs t-faint">
-            Changes affect future job searches and scoring.
-          </p>
+          <p className="text-xs t-faint">Changes affect future job searches and scoring.</p>
           <div className="flex gap-2">
             <button onClick={onClose} className="btn-secondary">Cancel</button>
             <button onClick={handleSave} disabled={saving} className="btn-primary">
-              <Save className="w-4 h-4" />
-              {saving ? 'Saving...' : 'Save Changes'}
+              <Save className="w-4 h-4" /> {saving ? 'Saving...' : 'Save Changes'}
             </button>
           </div>
         </div>

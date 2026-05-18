@@ -151,6 +151,12 @@ export default function App() {
 
       await Promise.all([loadJobs(), loadStats()]);
 
+      const now = Date.now();
+      setLastRefreshedAt(now);
+      try {
+        window.localStorage.setItem("jobradar-last-refresh", String(now));
+      } catch {}
+
       const parts = [];
       if (d.new_jobs > 0) parts.push(`${d.new_jobs} new`);
       if (d.filtered > 0) parts.push(`${d.filtered} filtered`);
