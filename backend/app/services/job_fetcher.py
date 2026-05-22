@@ -46,29 +46,48 @@ def fetch_all_jobs(profile, config):
     scrape_delay = config.get("SCRAPE_DELAY", 1.0)
     all_jobs = []
 
-    # ── Layer 1: Greenhouse API ──
-    logger.info("Layer 1: Fetching from Greenhouse API...")
-    try:
-        from app.services.ats_fetcher import fetch_greenhouse_jobs
-        all_jobs.extend(fetch_greenhouse_jobs(profile, delay=0.2))
-    except Exception as e:
-        logger.warning(f"Greenhouse failed: {e}")
+    # ── Layers 1, 2, 2b: ATS APIs (parallel) ──
+    logger.info("Layers 1-2b: Fetching from Greenhouse + Lever + Ashby (parallel)...")
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    # ── Layer 2: Lever API ──
-    logger.info("Layer 2: Fetching from Lever API...")
-    try:
-        from app.services.ats_fetcher import fetch_lever_jobs
-        all_jobs.extend(fetch_lever_jobs(profile, delay=0.2))
-    except Exception as e:
-        logger.warning(f"Lever failed: {e}")
+    def _fetch_greenhouse():
+        try:
+            from app.services.ats_fetcher import fetch_greenhouse_jobs
+            return fetch_greenhouse_jobs(profile, delay=0.15)
+        except Exception as e:
+            logger.warning(f"Greenhouse failed: {e}")
+            return []
 
-    # ── Layer 2b: Ashby API ──
-    logger.info("Layer 2b: Fetching from Ashby API...")
-    try:
-        from app.services.ats_fetcher import fetch_ashby_jobs
-        all_jobs.extend(fetch_ashby_jobs(profile, delay=0.2))
-    except Exception as e:
-        logger.warning(f"Ashby failed: {e}")
+    def _fetch_lever():
+        try:
+            from app.services.ats_fetcher import fetch_lever_jobs
+            return fetch_lever_jobs(profile, delay=0.15)
+        except Exception as e:
+            logger.warning(f"Lever failed: {e}")
+            return []
+
+    def _fetch_ashby():
+        try:
+            from app.services.ats_fetcher import fetch_ashby_jobs
+            return fetch_ashby_jobs(profile, delay=0.15)
+        except Exception as e:
+            logger.warning(f"Ashby failed: {e}")
+            return []
+
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        futures = {
+            executor.submit(_fetch_greenhouse): "Greenhouse",
+            executor.submit(_fetch_lever): "Lever",
+            executor.submit(_fetch_ashby): "Ashby",
+        }
+        for future in as_completed(futures):
+            name = futures[future]
+            try:
+                jobs = future.result(timeout=120)
+                all_jobs.extend(jobs)
+                logger.info(f"{name}: returned {len(jobs)} jobs")
+            except Exception as e:
+                logger.warning(f"{name} parallel fetch failed: {e}")
 
     # ── Layer 3: Jooble API ──
     jooble_key = config.get("JOOBLE_API_KEY", "")
