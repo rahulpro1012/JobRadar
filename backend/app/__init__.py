@@ -73,11 +73,13 @@ def create_app(config_class=None):
     from app.routes.jobs import jobs_bp
     from app.routes.blacklist import blacklist_bp
     from app.routes.settings import settings_bp
-    
+    from app.routes.admin import admin_bp
+
     app.register_blueprint(health_bp, url_prefix="/api")
     app.register_blueprint(profile_bp, url_prefix="/api")
     app.register_blueprint(jobs_bp, url_prefix="/api")
     app.register_blueprint(blacklist_bp, url_prefix="/api")
     app.register_blueprint(settings_bp, url_prefix="/api")
+    app.register_blueprint(admin_bp, url_prefix="/api")
     
     return app

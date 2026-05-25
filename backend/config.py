@@ -29,6 +29,11 @@ class Config:
     JOOBLE_API_KEY = os.environ.get("JOOBLE_API_KEY", "")
     SERPAPI_API_KEY = os.environ.get("SERPAPI_API_KEY", "")
     GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+
+    # Phase 1 additions
+    # Adzuna India API (free, ~250-1000 calls/month — sign up at developer.adzuna.com)
+    ADZUNA_APP_ID = os.environ.get("ADZUNA_APP_ID", "")
+    ADZUNA_APP_KEY = os.environ.get("ADZUNA_APP_KEY", "")
     # CORS
     FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:5173")
     

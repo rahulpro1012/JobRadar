@@ -1,16 +1,21 @@
 """
-JobRadar Job Fetcher v2
-Layer 1:  Greenhouse API (free, no key)
-Layer 2:  Lever API (free, no key)
-Layer 2b: Ashby API (free, no key)
-Layer 3:  Jooble API (free, key required)
-Layer 4:  Indeed RSS (free)
-Layer 5:  SerpApi Google Jobs (100/month)
-Layer 6:  Career page search URLs
-Layer 7:  SearxNG metasearch (NEW — replaces Google CSE)
-Layer 8:  Yahoo Search fallback (NEW)
-Layer 9:  Bing API (when key available)
-Layer 10: DuckDuckGo (disabled, kept for future)
+JobRadar Job Fetcher v3
+Layer 1:   Greenhouse API (free, no key)
+Layer 2:   Lever API (free, no key)
+Layer 2b:  Ashby API (free, no key)
+Layer 3:   Jooble API (free, key required)
+Layer 4:   Indeed RSS (free)
+Layer 5:   SerpApi Google Jobs (100/month)
+Layer 6:   Career page search URLs
+Layer 7:   SearxNG metasearch
+Layer 8:   Yahoo Search fallback
+Layer 9:   Bing API (when key available)
+Layer 10:  DuckDuckGo (disabled, kept for future)
+── Phase 1 additions ──
+Layer 11:  RemoteOK (free, no key — worldwide remote jobs)
+Layer 12:  HackerNews "Who is Hiring" (free, Algolia API — YC/startup remote jobs)
+Layer 13:  Arbeitnow (free, no key — global remote job board)
+Layer 14:  Adzuna India (free key required — India aggregator with salary data)
 """
 import re
 import time
@@ -26,6 +31,7 @@ from app.database import (
 from app.services.query_engine import (
     generate_queries, generate_site_queries, generate_rss_urls,
 )
+from app.services.search_cache import purge_expired as _purge_cache
 
 logger = logging.getLogger(__name__)
 
@@ -156,6 +162,46 @@ def fetch_all_jobs(profile, config):
     # logger.info("Layer 10: DuckDuckGo...")
     # for q in queries[:3]:
     #     all_jobs.extend(_fetch_from_duckduckgo(q["query"], scrape_delay))
+
+    # ── Layer 11: RemoteOK (free, no key, worldwide remote) ──
+    logger.info("Layer 11: Fetching from RemoteOK...")
+    try:
+        from app.services.remoteok_fetcher import fetch_remoteok_jobs
+        all_jobs.extend(fetch_remoteok_jobs(profile, delay=scrape_delay))
+    except Exception as e:
+        logger.warning(f"RemoteOK failed: {e}")
+
+    # ── Layer 12: HackerNews "Who is Hiring" ──
+    logger.info("Layer 12: Fetching from HN Who is Hiring...")
+    try:
+        from app.services.hn_fetcher import fetch_hn_jobs
+        all_jobs.extend(fetch_hn_jobs(profile, delay=0.5))
+    except Exception as e:
+        logger.warning(f"HN Who is Hiring failed: {e}")
+
+    # ── Layer 13: Arbeitnow (free, no key) ──
+    logger.info("Layer 13: Fetching from Arbeitnow...")
+    try:
+        from app.services.arbeitnow_fetcher import fetch_arbeitnow_jobs
+        all_jobs.extend(fetch_arbeitnow_jobs(profile, delay=scrape_delay))
+    except Exception as e:
+        logger.warning(f"Arbeitnow failed: {e}")
+
+    # ── Layer 14: Adzuna India (free key required) ──
+    adzuna_id = config.get("ADZUNA_APP_ID", "")
+    if adzuna_id:
+        logger.info("Layer 14: Fetching from Adzuna India...")
+        try:
+            from app.services.adzuna_fetcher import fetch_adzuna_jobs
+            all_jobs.extend(fetch_adzuna_jobs(profile, queries, config, delay=scrape_delay))
+        except Exception as e:
+            logger.warning(f"Adzuna failed: {e}")
+
+    # ── Maintenance: purge stale cache entries ──
+    try:
+        _purge_cache()
+    except Exception:
+        pass
 
     # Store new jobs
     new_count = _store_jobs(all_jobs)

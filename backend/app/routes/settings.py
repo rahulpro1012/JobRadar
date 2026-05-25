@@ -77,6 +77,27 @@ def get_quota():
             "daily_limit": 200,
             "source": "Groq AI — Fast (llama-3.1-8b)"
         },
+        # ── Phase 1 additions ──
+        "remoteok": {
+            "used": get_quota_usage("remoteok", today),
+            "daily_limit": -1,
+            "source": "RemoteOK (free, no key — worldwide remote)"
+        },
+        "hn_whoishiring": {
+            "used": get_quota_usage("hn_whoishiring", today),
+            "daily_limit": -1,
+            "source": "HN Who is Hiring (free, Algolia API)"
+        },
+        "arbeitnow": {
+            "used": get_quota_usage("arbeitnow", today),
+            "daily_limit": -1,
+            "source": "Arbeitnow (free, no key — global remote)"
+        },
+        "adzuna": {
+            "used": get_quota_usage("adzuna", today),
+            "daily_limit": 8,
+            "source": "Adzuna India (free key, ~250-1000/month)"
+        },
     }
     
     return jsonify({

@@ -110,6 +110,41 @@ CREATE TABLE IF NOT EXISTS quota_usage (
     UNIQUE(source, date)
 );
 
+-- Search result cache (prevents redundant API calls within TTL window)
+CREATE TABLE IF NOT EXISTS search_cache (
+    cache_key TEXT PRIMARY KEY,
+    source TEXT NOT NULL,
+    query TEXT NOT NULL,
+    location TEXT DEFAULT '',
+    results_json TEXT NOT NULL,
+    fetched_at TIMESTAMP NOT NULL,
+    expires_at TIMESTAMP NOT NULL
+);
+
+-- Per-source health tracking and circuit-breaker state
+CREATE TABLE IF NOT EXISTS source_health (
+    source TEXT PRIMARY KEY,
+    status TEXT NOT NULL DEFAULT 'healthy',
+    consecutive_failures INTEGER DEFAULT 0,
+    last_success_at TIMESTAMP,
+    last_failure_at TIMESTAMP,
+    last_failure_reason TEXT,
+    total_calls INTEGER DEFAULT 0,
+    total_failures INTEGER DEFAULT 0,
+    jobs_returned_last_run INTEGER DEFAULT 0,
+    disabled_until TIMESTAMP
+);
+
+-- Append-only audit log for source health events
+CREATE TABLE IF NOT EXISTS source_health_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    detail TEXT,
+    jobs_returned INTEGER,
+    timestamp TIMESTAMP NOT NULL DEFAULT (datetime('now'))
+);
+
 -- Indexes for common queries
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
 CREATE INDEX IF NOT EXISTS idx_jobs_match_score ON jobs(match_score DESC);
@@ -117,6 +152,9 @@ CREATE INDEX IF NOT EXISTS idx_jobs_fetched_date ON jobs(fetched_date DESC);
 CREATE INDEX IF NOT EXISTS idx_jobs_source_domain ON jobs(source_domain);
 CREATE INDEX IF NOT EXISTS idx_blacklist_type ON blacklist(type);
 CREATE INDEX IF NOT EXISTS idx_quota_date ON quota_usage(date);
+CREATE INDEX IF NOT EXISTS idx_search_cache_expires ON search_cache(expires_at);
+CREATE INDEX IF NOT EXISTS idx_search_cache_source ON search_cache(source);
+CREATE INDEX IF NOT EXISTS idx_health_log_source_time ON source_health_log(source, timestamp DESC);
 """
 
 # Default company career page registry (Indian IT + product companies)
