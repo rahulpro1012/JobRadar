@@ -25,14 +25,14 @@ logger = logging.getLogger(__name__)
 SOURCE_NAME = "adzuna"
 BASE_URL = "https://api.adzuna.com/v1/api/jobs/in/search/1"
 
-# Keep at most this many queries per refresh to protect the monthly quota
-MAX_QUERIES_PER_REFRESH = 5
-# Self-imposed daily limit (250 calls/month ÷ 30 days ≈ 8, we stay conservative)
-DAILY_LIMIT = 8
+# 3 queries × 4 locations = 12 API calls max per refresh
+MAX_QUERIES_PER_REFRESH = 3
+# Daily budget: 12 calls/day ≈ 360/month (well within 250-1000 free tier)
+DAILY_LIMIT = 12
 CACHE_TTL_HOURS = 6
 
-# Locations to cycle through for Adzuna searches (lowercase, as Adzuna expects)
-SEARCH_LOCATIONS = ["pune", "bangalore", "mumbai", "hyderabad", "remote"]
+# Rotate across these cities — title-case matches Adzuna's location field
+SEARCH_LOCATIONS = ["Pune", "Bangalore", "Mumbai", "Remote"]
 
 
 def fetch_adzuna_jobs(
@@ -42,13 +42,17 @@ def fetch_adzuna_jobs(
     delay: float = 1.5,
 ) -> list:
     """
-    Query Adzuna India for the top N queries, caching results per query.
+    Query Adzuna India for the top N queries across SEARCH_LOCATIONS cities.
+
+    Runs up to MAX_QUERIES_PER_REFRESH (3) queries × len(SEARCH_LOCATIONS) (4) cities
+    = 12 API calls max per refresh. Results are cached per (query, location) pair
+    so repeated refreshes within 6 h cost zero calls.
 
     Args:
         profile: Parsed user profile dict.
         queries: List of query dicts from generate_queries(), e.g. [{"query": "...", "tier": 1}]
         config:  Flask app.config dict (needs ADZUNA_APP_ID, ADZUNA_APP_KEY).
-        delay:   Seconds between API calls.
+        delay:   Seconds between live API calls.
 
     Returns:
         List of normalised job dicts ready for DB insertion.
@@ -85,62 +89,77 @@ def fetch_adzuna_jobs(
 
     all_jobs = []
     calls_made = 0
-    max_calls = min(MAX_QUERIES_PER_REFRESH, remaining_quota)
+    # Total budget: 3 queries × 4 locations, capped by remaining daily quota
+    max_calls = min(MAX_QUERIES_PER_REFRESH * len(SEARCH_LOCATIONS), remaining_quota)
 
-    for query_text in query_texts[:max_calls]:
-        # Try cache first — no API call if we have a fresh result
-        cached = cache_get(SOURCE_NAME, query_text, location="india", ttl_hours=CACHE_TTL_HOURS)
-        if cached is not None:
-            logger.debug(f"[{SOURCE_NAME}] cache hit for '{query_text[:50]}'")
-            filtered = [j for j in cached if _profile_matches(j, pf)]
-            all_jobs.extend(filtered)
-            continue
+    for query_text in query_texts[:MAX_QUERIES_PER_REFRESH]:
+        if calls_made >= max_calls:
+            break
 
-        try:
-            params = {
-                "app_id": app_id,
-                "app_key": app_key,
-                "what": query_text,
-                "where": "India",
-                "results_per_page": 50,
-                "max_days_old": 30,
-                "sort_by": "date",
-            }
-            resp = requests.get(
-                BASE_URL,
-                params=params,
-                timeout=20,
-                verify=False,
+        for location in SEARCH_LOCATIONS:
+            if calls_made >= max_calls:
+                break
+
+            # Try cache first (keyed by query + location independently)
+            cached = cache_get(
+                SOURCE_NAME, query_text, location=location.lower(), ttl_hours=CACHE_TTL_HOURS
             )
-            resp.raise_for_status()
-            results = resp.json().get("results", [])
-            increment_quota(SOURCE_NAME, today)
-            calls_made += 1
-        except Exception as e:
-            record_failure(SOURCE_NAME, f"query='{query_text[:50]}': {e}")
-            logger.warning(f"[{SOURCE_NAME}] API error for '{query_text[:50]}': {e}")
+            if cached is not None:
+                logger.debug(
+                    f"[{SOURCE_NAME}] cache hit: '{query_text[:40]}' @ {location}"
+                )
+                all_jobs.extend([j for j in cached if _profile_matches(j, pf)])
+                continue
+
+            try:
+                params = {
+                    "app_id": app_id,
+                    "app_key": app_key,
+                    "what": query_text,
+                    "where": location,       # ← location rotation (was hardcoded "India")
+                    "results_per_page": 50,
+                    "max_days_old": 30,
+                    "sort_by": "date",
+                }
+                resp = requests.get(
+                    BASE_URL,
+                    params=params,
+                    timeout=20,
+                    verify=False,
+                )
+                resp.raise_for_status()
+                results = resp.json().get("results", [])
+                increment_quota(SOURCE_NAME, today)
+                calls_made += 1
+            except Exception as e:
+                record_failure(
+                    SOURCE_NAME,
+                    f"query='{query_text[:40]}' loc={location}: {e}",
+                )
+                logger.warning(
+                    f"[{SOURCE_NAME}] API error '{query_text[:40]}' @ {location}: {e}"
+                )
+                time.sleep(delay)
+                continue
+
+            normalised = [_normalise(r) for r in results if r.get("title")]
+
+            # Cache raw normalised results keyed by (query, location)
+            cache_set(
+                SOURCE_NAME, query_text, normalised,
+                location=location.lower(), ttl_hours=CACHE_TTL_HOURS,
+            )
+
+            filtered_jobs = [j for j in normalised if _profile_matches(j, pf)]
+            all_jobs.extend(filtered_jobs)
             time.sleep(delay)
-            continue
-
-        normalised = [_normalise(r) for r in results if r.get("title")]
-
-        # Cache the raw normalised results (before profile filter)
-        cache_set(SOURCE_NAME, query_text, normalised, location="india", ttl_hours=CACHE_TTL_HOURS)
-
-        filtered = []
-        for job in normalised:
-            keep, reason = pf.should_keep(job["title"], job["description_snippet"])
-            if keep:
-                filtered.append(job)
-
-        all_jobs.extend(filtered)
-        time.sleep(delay)
 
     if all_jobs:
         record_success(SOURCE_NAME, jobs_returned=len(all_jobs))
     logger.info(
-        f"[{SOURCE_NAME}] {len(all_jobs)} jobs from {calls_made} API calls "
-        f"(quota: {used_today + calls_made}/{DAILY_LIMIT})"
+        f"[{SOURCE_NAME}] {len(all_jobs)} jobs from {calls_made} live API calls "
+        f"(quota today: {used_today + calls_made}/{DAILY_LIMIT}, "
+        f"locations: {SEARCH_LOCATIONS})"
     )
     return all_jobs
 

@@ -70,13 +70,22 @@ def fetch_remoteok_jobs(profile: dict, delay: float = 1.0) -> list:
     jobs = []
     filtered_geo = 0
     filtered_profile = 0
+    # Sampling lists for debug logging — helps verify geo-filter is doing real work
+    _loc_sample: list = []       # first 20 location strings seen (any)
+    _loc_blocked: list = []      # location strings that triggered the blocklist
 
     for item in items:
         location_str = item.get("location", "") or ""
 
+        # Collect location sample for debug output (no cost, tiny memory)
+        if len(_loc_sample) < 20:
+            _loc_sample.append(repr(location_str) if location_str else "(blank)")
+
         # Skip geo-restricted roles
         if not _india_eligible(location_str):
             filtered_geo += 1
+            if len(_loc_blocked) < 10:
+                _loc_blocked.append(repr(location_str))
             continue
 
         title = (item.get("position") or "").strip()
@@ -117,6 +126,12 @@ def fetch_remoteok_jobs(profile: dict, delay: float = 1.0) -> list:
         f"[{SOURCE_NAME}] {len(jobs)} kept "
         f"(geo-filtered: {filtered_geo}, profile-filtered: {filtered_profile})"
     )
+    # Debug: show what location strings RemoteOK actually sends and what we blocked
+    logger.debug(f"[{SOURCE_NAME}] Location sample (first 20): {_loc_sample}")
+    if _loc_blocked:
+        logger.debug(f"[{SOURCE_NAME}] Geo-blocked location strings: {_loc_blocked}")
+    else:
+        logger.debug(f"[{SOURCE_NAME}] Geo-filter: no locations blocked (all passed or blank)")
     return jobs
 
 

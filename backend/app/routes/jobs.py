@@ -163,6 +163,25 @@ def refresh_jobs():
         # ── Step 3: Dedup ──
         deduped = deduplicate_jobs()
 
+        # Log cluster coverage by source so we can verify new sources (RemoteOK,
+        # Arbeitnow, HN) are actually being matched against Greenhouse/Lever.
+        try:
+            cluster_stats = execute_query(
+                "SELECT source_domain, COUNT(*) as cnt FROM jobs "
+                "WHERE duplicate_cluster_id IS NOT NULL "
+                "GROUP BY source_domain ORDER BY cnt DESC",
+                fetch_all=True,
+            )
+            if cluster_stats:
+                stat_str = ", ".join(
+                    f"{r['source_domain']}:{r['cnt']}" for r in cluster_stats
+                )
+                logger.info(f"Dedup: {deduped} clusters. Clustered jobs by source → {stat_str}")
+            else:
+                logger.info(f"Dedup: {deduped} clusters (no cross-source duplicates found yet)")
+        except Exception:
+            pass  # dedup log is non-critical
+
         # ── Step 4: Rule-based scoring ──
         scored = score_all_jobs(profile)
 

@@ -53,6 +53,9 @@ def fetch_arbeitnow_jobs(profile: dict, delay: float = 1.0) -> list:
 
     jobs = []
     filtered = 0
+    # Collect sample rejections so we can debug whether ProfileFilter is too aggressive
+    _MAX_REJECTION_SAMPLES = 10
+    rejection_samples = []
 
     for item in items:
         title = (item.get("title") or "").strip()
@@ -71,6 +74,8 @@ def fetch_arbeitnow_jobs(profile: dict, delay: float = 1.0) -> list:
         keep, reason = pf.should_keep(title, searchable)
         if not keep:
             filtered += 1
+            if len(rejection_samples) < _MAX_REJECTION_SAMPLES:
+                rejection_samples.append(f'"{title}" [{reason}]')
             continue
 
         # Match user skills against Arbeitnow tags
@@ -98,6 +103,11 @@ def fetch_arbeitnow_jobs(profile: dict, delay: float = 1.0) -> list:
     time.sleep(delay)
     record_success(SOURCE_NAME, jobs_returned=len(jobs))
     logger.info(f"[{SOURCE_NAME}] {len(jobs)} kept, {filtered} profile-filtered")
+    if rejection_samples:
+        logger.debug(
+            f"[{SOURCE_NAME}] Sample rejections ({len(rejection_samples)} shown): "
+            + " | ".join(rejection_samples)
+        )
     return jobs
 
 
