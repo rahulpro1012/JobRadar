@@ -5,6 +5,7 @@ Layer 8: Yahoo Search fallback (free, HTML scraping)
 
 Both support site: operator for targeting Naukri, LinkedIn, Indeed.
 """
+import os
 import re
 import time
 import json
@@ -15,8 +16,10 @@ from app.database import increment_quota
 
 logger = logging.getLogger(__name__)
 
-# Public SearxNG instances (fallback chain)
-SEARXNG_INSTANCES = [
+# Self-hosted instance (primary when SEARXNG_URL is set in .env) + public fallbacks
+_self_hosted = os.environ.get("SEARXNG_URL", "").rstrip("/")
+SEARXNG_INSTANCES = [u for u in [
+    _self_hosted,                       # self-hosted on Render (preferred)
     "https://search.indst.eu",
     "https://search.einfachzocken.eu",
     "https://search.hbubli.cc",
@@ -25,7 +28,7 @@ SEARXNG_INSTANCES = [
     "https://ooglester.com",
     "https://metacat.online",
     "https://search.canine.tools",
-]
+] if u]  # drop empty string when SEARXNG_URL is not set
 
 
 # ============================================================
@@ -38,6 +41,19 @@ def fetch_from_searxng(queries, delay=1.5):
     Returns structured JSON from Google+Bing+Yahoo simultaneously.
     """
     import requests
+
+    if not SEARXNG_INSTANCES:
+        logger.debug("[searxng] No instances configured — skipping")
+        return []
+
+    # Warmup ping for self-hosted Render instance (cold-starts take ~30s)
+    primary = SEARXNG_INSTANCES[0]
+    if "onrender.com" in primary:
+        try:
+            requests.get(f"{primary}/healthz", timeout=5, verify=False)
+            logger.debug("[searxng] Warmup ping sent to self-hosted instance")
+        except Exception:
+            pass  # fire-and-forget
 
     all_jobs = []
     instance_idx = 0

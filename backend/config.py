@@ -34,6 +34,11 @@ class Config:
     # Adzuna India API (free, ~250-1000 calls/month — sign up at developer.adzuna.com)
     ADZUNA_APP_ID = os.environ.get("ADZUNA_APP_ID", "")
     ADZUNA_APP_KEY = os.environ.get("ADZUNA_APP_KEY", "")
+
+    # Phase 2 additions
+    # Self-hosted SearxNG URL (deploy searxng-jobradar repo to Render free tier)
+    # When set, this is used as the primary SearxNG instance (replaces flaky public ones)
+    SEARXNG_URL = os.environ.get("SEARXNG_URL", "")
     # CORS
     FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:5173")
     

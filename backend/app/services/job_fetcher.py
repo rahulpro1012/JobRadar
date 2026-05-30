@@ -4,10 +4,10 @@ Layer 1:   Greenhouse API (free, no key)
 Layer 2:   Lever API (free, no key)
 Layer 2b:  Ashby API (free, no key)
 Layer 3:   Jooble API (free, key required)
-Layer 4:   Indeed RSS (free)
+Layer 4:   Indeed RSS (disabled — consistent failures)
 Layer 5:   SerpApi Google Jobs (100/month)
 Layer 6:   Career page search URLs
-Layer 7:   SearxNG metasearch
+Layer 7:   SearxNG (disabled until self-hosted — set SEARXNG_URL in .env)
 Layer 8:   Yahoo Search fallback
 Layer 9:   Bing API (when key available)
 Layer 10:  DuckDuckGo (disabled, kept for future)
@@ -16,6 +16,9 @@ Layer 11:  RemoteOK (free, no key — worldwide remote jobs)
 Layer 12:  HackerNews "Who is Hiring" (free, Algolia API — YC/startup remote jobs)
 Layer 13:  Arbeitnow (free, no key — global remote job board)
 Layer 14:  Adzuna India (free key required — India aggregator with salary data)
+── Phase 2 additions ──
+Layer 15:  Workable ATS (free, no key — remote-first startups)
+Layer 16:  SmartRecruiters ATS (free, no key — enterprise companies)
 """
 import re
 import time
@@ -80,11 +83,29 @@ def fetch_all_jobs(profile, config):
             logger.warning(f"Ashby failed: {e}")
             return []
 
-    with ThreadPoolExecutor(max_workers=3) as executor:
+    def _fetch_workable():
+        try:
+            from app.services.workable_fetcher import fetch_workable_jobs
+            return fetch_workable_jobs(profile, delay=0.3)
+        except Exception as e:
+            logger.warning(f"Workable failed: {e}")
+            return []
+
+    def _fetch_smartrecruiters():
+        try:
+            from app.services.smartrecruiters_fetcher import fetch_smartrecruiters_jobs
+            return fetch_smartrecruiters_jobs(profile, delay=0.3)
+        except Exception as e:
+            logger.warning(f"SmartRecruiters failed: {e}")
+            return []
+
+    with ThreadPoolExecutor(max_workers=5) as executor:
         futures = {
             executor.submit(_fetch_greenhouse): "Greenhouse",
             executor.submit(_fetch_lever): "Lever",
             executor.submit(_fetch_ashby): "Ashby",
+            executor.submit(_fetch_workable): "Workable",
+            executor.submit(_fetch_smartrecruiters): "SmartRecruiters",
         }
         for future in as_completed(futures):
             name = futures[future]
@@ -105,9 +126,11 @@ def fetch_all_jobs(profile, config):
         except Exception as e:
             logger.warning(f"Jooble failed: {e}")
 
-    # ── Layer 4: Indeed RSS ──
-    logger.info("Layer 4: Fetching from Indeed RSS...")
-    all_jobs.extend(_fetch_from_indeed_rss(profile, scrape_delay))
+    # ── Layer 4: Indeed RSS (disabled — consistent 0-result rate) ──
+    # Uncomment to re-enable if Indeed RSS feed recovers
+    # logger.info("Layer 4: Fetching from Indeed RSS...")
+    # all_jobs.extend(_fetch_from_indeed_rss(profile, scrape_delay))
+    logger.debug("Layer 4: Indeed RSS — disabled (consistent failures)")
 
     # ── Layer 5: SerpApi Google Jobs ──
     serpapi_key = config.get("SERPAPI_API_KEY", "")
@@ -123,16 +146,17 @@ def fetch_all_jobs(profile, config):
     logger.info("Layer 6: Generating career page search URLs...")
     all_jobs.extend(_fetch_from_career_pages(profile))
 
-    # ── Layer 7: SearxNG Metasearch (replaces Google CSE) ──
-    logger.info("Layer 7: Fetching from SearxNG...")
-    try:
-        from app.services.search_fetcher import fetch_from_searxng, build_search_queries
-        # Build location-aware queries for job portals
-        search_q = _build_portal_queries(profile, queries, search_locations)
-        searxng_jobs = fetch_from_searxng(search_q, delay=1.5)
-        all_jobs.extend(searxng_jobs)
-    except Exception as e:
-        logger.warning(f"SearxNG failed: {e}")
+    # ── Layer 7: SearxNG (disabled until self-hosted instance is live) ──
+    # Set SEARXNG_URL in .env and uncomment to re-enable (see Phase 2.4)
+    # logger.info("Layer 7: Fetching from SearxNG...")
+    # try:
+    #     from app.services.search_fetcher import fetch_from_searxng, build_search_queries
+    #     search_q = _build_portal_queries(profile, queries, search_locations)
+    #     searxng_jobs = fetch_from_searxng(search_q, delay=1.5)
+    #     all_jobs.extend(searxng_jobs)
+    # except Exception as e:
+    #     logger.warning(f"SearxNG failed: {e}")
+    logger.debug("Layer 7: SearxNG — disabled (set SEARXNG_URL in .env to re-enable)")
 
     # ── Layer 8: Yahoo Search Fallback ──
     logger.info("Layer 8: Fetching from Yahoo Search...")

@@ -7,7 +7,7 @@ We filter for India-eligible remote positions and run through ProfileFilter.
 
 Docs: https://remoteok.com/api
 """
-import json
+import json as _json
 import time
 import logging
 import requests
@@ -24,13 +24,6 @@ HEADERS = {
     "User-Agent": "JobRadar/1.0 (personal job search tool; contact via github)",
     "Accept": "application/json",
 }
-
-# Geo-restrictions that indicate the role is NOT open to India/worldwide
-_GEO_BLOCKLIST = [
-    "us only", "usa only", "united states only",
-    "eu only", "europe only", "uk only", "canada only",
-    "australia only", "latin america only",
-]
 
 
 def fetch_remoteok_jobs(profile: dict, delay: float = 1.0) -> list:
@@ -58,7 +51,7 @@ def fetch_remoteok_jobs(profile: dict, delay: float = 1.0) -> list:
             verify=False,
         )
         resp.raise_for_status()
-        raw = resp.json()
+        raw = _json.loads(resp.content.decode('utf-8', errors='replace'))
     except Exception as e:
         record_failure(SOURCE_NAME, str(e))
         logger.warning(f"[{SOURCE_NAME}] fetch error: {e}")
@@ -81,8 +74,10 @@ def fetch_remoteok_jobs(profile: dict, delay: float = 1.0) -> list:
         if len(_loc_sample) < 20:
             _loc_sample.append(repr(location_str) if location_str else "(blank)")
 
-        # Skip geo-restricted roles
-        if not _india_eligible(location_str):
+        description = _strip_html(item.get("description") or "")
+
+        # Skip geo-restricted roles (check both location field and description text)
+        if not _india_eligible(location_str, description):
             filtered_geo += 1
             if len(_loc_blocked) < 10:
                 _loc_blocked.append(repr(location_str))
@@ -91,7 +86,6 @@ def fetch_remoteok_jobs(profile: dict, delay: float = 1.0) -> list:
         title = (item.get("position") or "").strip()
         company = (item.get("company") or "").strip()
         url = item.get("url") or item.get("apply_url") or ""
-        description = _strip_html(item.get("description") or "")
         tags = item.get("tags") or []
 
         if not title or not url:
@@ -135,15 +129,24 @@ def fetch_remoteok_jobs(profile: dict, delay: float = 1.0) -> list:
     return jobs
 
 
-def _india_eligible(location_str: str) -> bool:
+def _india_eligible(location_str: str, description: str = "") -> bool:
     """
     Return True for Worldwide / Asia / blank locations.
     Return False for explicit geo-restrictions that exclude India.
+    Checks both the location field and description — RemoteOK often puts
+    geo-restrictions like "US only" in the description, not the location field.
     """
-    if not location_str:
+    combined = (location_str + " " + description).lower()
+    if not combined.strip():
         return True  # blank = assume worldwide remote
-    loc = location_str.lower()
-    return not any(blocker in loc for blocker in _GEO_BLOCKLIST)
+    _BLOCKLIST = [
+        "us only", "usa only", "united states only", "must be based in the us",
+        "must be located in", "must reside in the us", "must work us hours",
+        "eu only", "europe only", "uk only", "must be in the uk",
+        "canada only", "australia only", "latin america only",
+        "must be authorized to work in the us",
+    ]
+    return not any(b in combined for b in _BLOCKLIST)
 
 
 def _strip_html(text: str) -> str:

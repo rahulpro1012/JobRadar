@@ -24,11 +24,8 @@ GREENHOUSE_COMPANIES = {
     "Cloudflare": "cloudflare",
     "Coinbase": "coinbase",
     "Figma": "figma",
-    "Notion": "notion",
     "Discord": "discord",
     "Brex": "brex",
-    "Plaid": "plaid",
-    "Ramp": "ramp",
     "Airtable": "airtable",
     "Webflow": "webflow",
     "HashiCorp": "hashicorp",
@@ -43,22 +40,21 @@ GREENHOUSE_COMPANIES = {
     "Vercel": "vercel",
     "Railway": "railway",
     "Retool": "retool",
-    "Linear": "linear",
-    "Dbt Labs": "daboraoriginc",
+    "Dbt Labs": "dbtlabs",
     "Supabase": "supabase",
     "Render": "render",
     "Fly.io": "fly-io",
     "Neon": "neon-inc",
     "Turso": "turso",
-    "Cred": "cred",
+    "CRED": "cred",
     "Razorpay": "razorpay",
     "Swiggy": "swiggy",
     "Meesho": "meesho",
     "Dream11": "dream11",
     "MPL": "mobilepremierleague",
-    "CRED": "cred",
-    "Zerodha": "zerodha",
-    "Zomato": "zomato",
+    "Chargebee": "chargebee",
+    "BrowserStack": "browserstack",
+    "Setu": "setu",
 }
 
 LEVER_COMPANIES = {
@@ -82,10 +78,10 @@ LEVER_COMPANIES = {
 }
 
 ASHBY_COMPANIES = {
-    "Notion": "notion",
-    "Plaid": "plaid",
-    "Ramp": "ramp",
-    "Linear": "linear",
+    "Notion": "notion",      # canonical — removed from Greenhouse
+    "Plaid": "plaid",        # canonical — removed from Greenhouse
+    "Ramp": "ramp",          # canonical — removed from Greenhouse
+    "Linear": "linear",      # canonical — removed from Greenhouse
     "Deel": "deel",
     "Vanta": "vanta",
     "Sardine": "sardine",

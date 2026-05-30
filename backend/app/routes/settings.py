@@ -98,6 +98,17 @@ def get_quota():
             "daily_limit": 8,
             "source": "Adzuna India (free key, ~250-1000/month)"
         },
+        # ── Phase 2 additions ──
+        "workable": {
+            "used": get_quota_usage("workable", today),
+            "daily_limit": -1,
+            "source": "Workable ATS (free, no key — remote-first startups)"
+        },
+        "smartrecruiters": {
+            "used": get_quota_usage("smartrecruiters", today),
+            "daily_limit": -1,
+            "source": "SmartRecruiters ATS (free, no key — enterprise)"
+        },
     }
     
     return jsonify({
