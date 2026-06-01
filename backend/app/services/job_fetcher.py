@@ -43,9 +43,20 @@ QUOTA_LIMITS = {
 }
 
 
-def fetch_all_jobs(profile, config):
-    """Main entry — fetches from all sources with AI queries + location awareness."""
+import time as _time_module  # For phase 1 parallelization
+import threading
+import uuid
+from datetime import datetime
 
+
+def fetch_all_jobs(profile, config):
+    """
+    ── PHASE 1: PARALLEL LAYER EXECUTION ──
+    Fetch from ALL 16 layers in parallel using ThreadPoolExecutor.
+    Expected time: ~45-60 sec (bounded by slowest layer, typically ATS at ~50s).
+
+    Previously: ~3 min 10 sec (sequential execution)
+    """
     # Get AI-generated queries if available
     ai_queries = config.get("_ai_queries", [])
     queries = generate_queries(profile, ai_queries=ai_queries)
@@ -53,173 +64,131 @@ def fetch_all_jobs(profile, config):
     # Build location list for search layers
     search_locations = _get_search_locations(profile)
     scrape_delay = config.get("SCRAPE_DELAY", 1.0)
-    all_jobs = []
 
-    # ── Layers 1, 2, 2b: ATS APIs (parallel) ──
-    logger.info("Layers 1-2b: Fetching from Greenhouse + Lever + Ashby (parallel)...")
+    # Import parallel execution tooling
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    def _fetch_greenhouse():
-        try:
-            from app.services.ats_fetcher import fetch_greenhouse_jobs
-            return fetch_greenhouse_jobs(profile, delay=0.15)
-        except Exception as e:
-            logger.warning(f"Greenhouse failed: {e}")
-            return []
+    # Define all 16 layers as (name, callable, kwargs_dict)
+    layers = []
+    layer_timings = {}
 
-    def _fetch_lever():
-        try:
-            from app.services.ats_fetcher import fetch_lever_jobs
-            return fetch_lever_jobs(profile, delay=0.15)
-        except Exception as e:
-            logger.warning(f"Lever failed: {e}")
-            return []
+    # ── ATS Sources (parallel internally, now part of parallel pool) ──
+    def _get_ats_jobs():
+        """Fetch from Greenhouse, Lever, Ashby, Workable, SmartRecruiters in parallel."""
+        from app.services.ats_fetcher import fetch_greenhouse_jobs, fetch_lever_jobs, fetch_ashby_jobs
+        from app.services.workable_fetcher import fetch_workable_jobs
+        from app.services.smartrecruiters_fetcher import fetch_smartrecruiters_jobs
 
-    def _fetch_ashby():
-        try:
-            from app.services.ats_fetcher import fetch_ashby_jobs
-            return fetch_ashby_jobs(profile, delay=0.15)
-        except Exception as e:
-            logger.warning(f"Ashby failed: {e}")
-            return []
+        ats_jobs = []
+        with ThreadPoolExecutor(max_workers=5) as ats_executor:
+            ats_futures = {
+                ats_executor.submit(fetch_greenhouse_jobs, profile, 0.15): "Greenhouse",
+                ats_executor.submit(fetch_lever_jobs, profile, 0.15): "Lever",
+                ats_executor.submit(fetch_ashby_jobs, profile, 0.15): "Ashby",
+                ats_executor.submit(fetch_workable_jobs, profile, 0.3): "Workable",
+                ats_executor.submit(fetch_smartrecruiters_jobs, profile, 0.3): "SmartRecruiters",
+            }
+            for future in as_completed(ats_futures):
+                try:
+                    jobs = future.result(timeout=120)
+                    ats_jobs.extend(jobs)
+                except Exception as e:
+                    logger.warning(f"{ats_futures[future]} failed: {e}")
+        return ats_jobs
 
-    def _fetch_workable():
-        try:
-            from app.services.workable_fetcher import fetch_workable_jobs
-            return fetch_workable_jobs(profile, delay=0.3)
-        except Exception as e:
-            logger.warning(f"Workable failed: {e}")
-            return []
+    layers.append(("ATS (Greenhouse/Lever/Ashby/Workable/SmartRecruiters)", _get_ats_jobs, {}))
 
-    def _fetch_smartrecruiters():
-        try:
-            from app.services.smartrecruiters_fetcher import fetch_smartrecruiters_jobs
-            return fetch_smartrecruiters_jobs(profile, delay=0.3)
-        except Exception as e:
-            logger.warning(f"SmartRecruiters failed: {e}")
-            return []
-
-    with ThreadPoolExecutor(max_workers=5) as executor:
-        futures = {
-            executor.submit(_fetch_greenhouse): "Greenhouse",
-            executor.submit(_fetch_lever): "Lever",
-            executor.submit(_fetch_ashby): "Ashby",
-            executor.submit(_fetch_workable): "Workable",
-            executor.submit(_fetch_smartrecruiters): "SmartRecruiters",
-        }
-        for future in as_completed(futures):
-            name = futures[future]
-            try:
-                jobs = future.result(timeout=120)
-                all_jobs.extend(jobs)
-                logger.info(f"{name}: returned {len(jobs)} jobs")
-            except Exception as e:
-                logger.warning(f"{name} parallel fetch failed: {e}")
-
-    # ── Layer 3: Jooble API ──
+    # ── Layer 3: Jooble ──
     jooble_key = config.get("JOOBLE_API_KEY", "")
     if jooble_key:
-        logger.info("Layer 3: Fetching from Jooble API...")
-        try:
-            from app.services.job_api_fetcher import fetch_jooble_jobs
-            all_jobs.extend(fetch_jooble_jobs(profile, jooble_key, delay=scrape_delay))
-        except Exception as e:
-            logger.warning(f"Jooble failed: {e}")
+        from app.services.job_api_fetcher import fetch_jooble_jobs
+        layers.append(("Jooble", fetch_jooble_jobs, {"profile": profile, "api_key": jooble_key, "delay": scrape_delay}))
 
-    # ── Layer 4: Indeed RSS (disabled — consistent 0-result rate) ──
-    # Uncomment to re-enable if Indeed RSS feed recovers
-    # logger.info("Layer 4: Fetching from Indeed RSS...")
-    # all_jobs.extend(_fetch_from_indeed_rss(profile, scrape_delay))
-    logger.debug("Layer 4: Indeed RSS — disabled (consistent failures)")
-
-    # ── Layer 5: SerpApi Google Jobs ──
+    # ── Layer 5: SerpApi ──
     serpapi_key = config.get("SERPAPI_API_KEY", "")
     if serpapi_key:
-        logger.info("Layer 5: Fetching from SerpApi Google Jobs...")
-        try:
-            from app.services.job_api_fetcher import fetch_serpapi_jobs
-            all_jobs.extend(fetch_serpapi_jobs(profile, serpapi_key, delay=scrape_delay))
-        except Exception as e:
-            logger.warning(f"SerpApi failed: {e}")
+        from app.services.job_api_fetcher import fetch_serpapi_jobs
+        layers.append(("SerpApi", fetch_serpapi_jobs, {"profile": profile, "api_key": serpapi_key, "delay": scrape_delay}))
 
-    # ── Layer 6: Career page search URLs ──
-    logger.info("Layer 6: Generating career page search URLs...")
-    all_jobs.extend(_fetch_from_career_pages(profile))
+    # ── Layer 6: Career Pages ──
+    layers.append(("Career Pages", _fetch_from_career_pages, {"profile": profile}))
 
-    # ── Layer 7: SearxNG (disabled until self-hosted instance is live) ──
-    # Set SEARXNG_URL in .env and uncomment to re-enable (see Phase 2.4)
-    # logger.info("Layer 7: Fetching from SearxNG...")
-    # try:
-    #     from app.services.search_fetcher import fetch_from_searxng, build_search_queries
-    #     search_q = _build_portal_queries(profile, queries, search_locations)
-    #     searxng_jobs = fetch_from_searxng(search_q, delay=1.5)
-    #     all_jobs.extend(searxng_jobs)
-    # except Exception as e:
-    #     logger.warning(f"SearxNG failed: {e}")
-    logger.debug("Layer 7: SearxNG — disabled (set SEARXNG_URL in .env to re-enable)")
+    # ── Layer 7: SearxNG (RE-ENABLED - uses self-hosted instance from SEARXNG_URL) ──
+    searxng_url = config.get("SEARXNG_URL", "")
+    if searxng_url:
+        from app.services.search_fetcher import fetch_from_searxng
+        portal_queries = _build_portal_queries(profile, queries, search_locations)
+        layers.append(("SearxNG (Naukri + LinkedIn)", fetch_from_searxng, {"queries": portal_queries, "delay": 1.5}))
+    else:
+        logger.debug("Layer 7: SearxNG disabled (set SEARXNG_URL in .env to enable)")
 
-    # ── Layer 8: Yahoo Search Fallback ──
-    logger.info("Layer 8: Fetching from Yahoo Search...")
-    try:
-        from app.services.search_fetcher import fetch_from_yahoo
-        yahoo_q = _build_portal_queries(profile, queries, search_locations)[:4]
-        yahoo_jobs = fetch_from_yahoo(yahoo_q, delay=1.5)
-        all_jobs.extend(yahoo_jobs)
-    except Exception as e:
-        logger.warning(f"Yahoo failed: {e}")
+    # ── Layer 8: Yahoo ──
+    from app.services.search_fetcher import fetch_from_yahoo
+    yahoo_q = _build_portal_queries(profile, queries, search_locations)[:4]
+    layers.append(("Yahoo", fetch_from_yahoo, {"queries": yahoo_q, "delay": 1.5}))
 
-    # ── Layer 9: Bing API ──
+    # ── Layer 9: Bing ──
     bing_key = config.get("BING_API_KEY", "")
     if bing_key:
         today_usage = get_quota_usage("bing")
         remaining = QUOTA_LIMITS["bing"] - today_usage
         if remaining > 0:
-            logger.info(f"Layer 9: Bing ({remaining} remaining)...")
-            top_queries = [q for q in queries if q["tier"] <= 2][:3]
-            site_queries = generate_site_queries(top_queries, ["naukri.com", "indeed.co.in"])
-            max_calls = min(6, remaining, len(site_queries))
-            for sq in site_queries[:max_calls]:
-                jobs = _fetch_from_bing(sq["site_query"], bing_key, scrape_delay)
-                all_jobs.extend(jobs)
+            def _fetch_bing_safe():
+                jobs = []
+                try:
+                    top_queries = [q for q in queries if q["tier"] <= 2][:3]
+                    site_queries = generate_site_queries(top_queries, ["naukri.com", "indeed.co.in"])
+                    max_calls = min(6, remaining, len(site_queries))
+                    for sq in site_queries[:max_calls]:
+                        jobs.extend(_fetch_from_bing(sq["site_query"], bing_key, scrape_delay))
+                except Exception as e:
+                    logger.warning(f"Bing failed: {e}")
+                return jobs
+            layers.append(("Bing", _fetch_bing_safe, {}))
 
-    # ── Layer 10: DuckDuckGo (disabled, kept for future) ──
-    # logger.info("Layer 10: DuckDuckGo...")
-    # for q in queries[:3]:
-    #     all_jobs.extend(_fetch_from_duckduckgo(q["query"], scrape_delay))
+    # ── Layer 11: RemoteOK ──
+    from app.services.remoteok_fetcher import fetch_remoteok_jobs
+    layers.append(("RemoteOK", fetch_remoteok_jobs, {"profile": profile, "delay": scrape_delay}))
 
-    # ── Layer 11: RemoteOK (free, no key, worldwide remote) ──
-    logger.info("Layer 11: Fetching from RemoteOK...")
-    try:
-        from app.services.remoteok_fetcher import fetch_remoteok_jobs
-        all_jobs.extend(fetch_remoteok_jobs(profile, delay=scrape_delay))
-    except Exception as e:
-        logger.warning(f"RemoteOK failed: {e}")
+    # ── Layer 12: HackerNews Who is Hiring ──
+    from app.services.hn_fetcher import fetch_hn_jobs
+    layers.append(("HN Who's Hiring", fetch_hn_jobs, {"profile": profile, "delay": 0.5}))
 
-    # ── Layer 12: HackerNews "Who is Hiring" ──
-    logger.info("Layer 12: Fetching from HN Who is Hiring...")
-    try:
-        from app.services.hn_fetcher import fetch_hn_jobs
-        all_jobs.extend(fetch_hn_jobs(profile, delay=0.5))
-    except Exception as e:
-        logger.warning(f"HN Who is Hiring failed: {e}")
+    # ── Layer 13: Arbeitnow ──
+    from app.services.arbeitnow_fetcher import fetch_arbeitnow_jobs
+    layers.append(("Arbeitnow", fetch_arbeitnow_jobs, {"profile": profile, "delay": scrape_delay}))
 
-    # ── Layer 13: Arbeitnow (free, no key) ──
-    logger.info("Layer 13: Fetching from Arbeitnow...")
-    try:
-        from app.services.arbeitnow_fetcher import fetch_arbeitnow_jobs
-        all_jobs.extend(fetch_arbeitnow_jobs(profile, delay=scrape_delay))
-    except Exception as e:
-        logger.warning(f"Arbeitnow failed: {e}")
-
-    # ── Layer 14: Adzuna India (free key required) ──
+    # ── Layer 14: Adzuna ──
     adzuna_id = config.get("ADZUNA_APP_ID", "")
     if adzuna_id:
-        logger.info("Layer 14: Fetching from Adzuna India...")
-        try:
-            from app.services.adzuna_fetcher import fetch_adzuna_jobs
-            all_jobs.extend(fetch_adzuna_jobs(profile, queries, config, delay=scrape_delay))
-        except Exception as e:
-            logger.warning(f"Adzuna failed: {e}")
+        from app.services.adzuna_fetcher import fetch_adzuna_jobs
+        layers.append(("Adzuna", fetch_adzuna_jobs, {"profile": profile, "queries": queries, "config": config, "delay": scrape_delay}))
+
+    # ═══════════════════════════════════════════════════════════════
+    # RUN ALL LAYERS IN PARALLEL
+    # ═══════════════════════════════════════════════════════════════
+    logger.info(f"Phase 1: Parallel fetch from {len(layers)} layers (max_workers=12, timeout=90s per layer)...")
+
+    all_jobs = []
+    with ThreadPoolExecutor(max_workers=12) as executor:
+        futures = {
+            executor.submit(_safe_run_layer, name, fn, kwargs): name
+            for name, fn, kwargs in layers
+        }
+
+        for future in as_completed(futures, timeout=120):
+            name = futures[future]
+            try:
+                jobs, elapsed = future.result(timeout=95)  # Hard cap
+                all_jobs.extend(jobs)
+                layer_timings[name] = (len(jobs), round(elapsed, 1))
+                logger.info(f"  [{name}] {len(jobs)} jobs ({elapsed:.1f}s)")
+            except Exception as e:
+                logger.warning(f"  [{name}] failed: {e}")
+                layer_timings[name] = (0, -1)
+
+    logger.info(f"Phase 1 complete: {len(all_jobs)} total jobs from {len(layers)} layers")
+    logger.debug(f"Per-layer timing: {layer_timings}")
 
     # ── Maintenance: purge stale cache entries ──
     try:
@@ -231,6 +200,21 @@ def fetch_all_jobs(profile, config):
     new_count = _store_jobs(all_jobs)
     logger.info(f"Fetched {len(all_jobs)} total, {new_count} new jobs stored.")
     return new_count
+
+
+def _safe_run_layer(name, fn, kwargs):
+    """
+    Execute a fetcher with timing + exception isolation.
+    Returns (jobs_list, elapsed_seconds).
+    """
+    start = _time_module.time()
+    try:
+        jobs = fn(**kwargs) or []
+    except Exception as e:
+        logger.exception(f"[{name}] crashed: {e}")
+        jobs = []
+    elapsed = _time_module.time() - start
+    return jobs, elapsed
 
 
 # ============================================================
@@ -502,3 +486,114 @@ def _store_jobs(jobs):
 
         conn.commit()
     return new_count
+
+
+# ============================================================
+# Phase 2: Async Background Refresh (Background Jobs + Polling)
+# ============================================================
+
+def trigger_async_refresh(profile, config):
+    """
+    Kick off an async refresh job.
+    Returns job_id immediately for the frontend to poll.
+    The actual fetching happens in a background thread.
+    """
+    from app.database import create_refresh_job
+
+    job_id = str(uuid.uuid4())
+
+    # Create DB record
+    create_refresh_job(job_id)
+
+    # Spawn background thread (daemon = doesn't block app shutdown)
+    thread = threading.Thread(
+        target=_run_refresh_background,
+        args=(job_id, profile, config),
+        daemon=True
+    )
+    thread.start()
+
+    return job_id
+
+
+def _run_refresh_background(job_id, profile, config):
+    """
+    Background thread: Execute Phase 1 (parallel fetch), apply filters,
+    score, and store to DB. Updates refresh_jobs table with progress.
+    """
+    from app.database import update_refresh_job, get_connection
+    import json
+
+    try:
+        # === STAGE 1: Parallel fetch all layers ===
+        logger.info(f"[RefreshJob {job_id}] Starting Phase 1: parallel fetch...")
+        update_refresh_job(job_id, status='running')
+
+        all_jobs = fetch_all_jobs(profile, config)
+
+        # === STAGE 2: Apply filters + rule-based scoring ===
+        logger.info(f"[RefreshJob {job_id}] Stage 2: applying filters...")
+        from app.services.blacklist_engine import apply_blacklist_filters
+        from app.services.deduplicator import deduplicate_jobs
+        from app.services.scorer import score_jobs
+
+        all_jobs = apply_blacklist_filters(all_jobs)
+        all_jobs = deduplicate_jobs(all_jobs)
+        all_jobs = score_jobs(all_jobs)
+
+        # Store jobs with rule-based scores (AI pending)
+        new_count = _store_jobs(all_jobs)
+
+        update_refresh_job(
+            job_id,
+            jobs_fetched=len(all_jobs),
+            jobs_new=new_count
+        )
+
+        # === STAGE 3: AI scoring (top 16 jobs) ===
+        logger.info(f"[RefreshJob {job_id}] Stage 3: AI scoring top jobs...")
+        update_refresh_job(job_id, status='ai_scoring')
+
+        from app.services.ai_agent import score_jobs_with_ai
+
+        top_jobs = sorted(all_jobs, key=lambda j: j.get("match_score", 0), reverse=True)[:16]
+        if top_jobs:
+            ai_results = score_jobs_with_ai(top_jobs)
+            ai_count = 0
+            # Update jobs with AI scores in DB
+            with get_connection() as conn:
+                for job in ai_results:
+                    if "ai_score" in job:
+                        conn.execute("""
+                            UPDATE jobs
+                            SET ai_score = ?, ai_reason = ?
+                            WHERE source_url = ?
+                        """, (job.get("ai_score"), job.get("ai_reason", ""), job.get("source_url")))
+                        ai_count += 1
+                conn.commit()
+            update_refresh_job(job_id, jobs_ai_scored=ai_count)
+
+        # === Completion ===
+        logger.info(f"[RefreshJob {job_id}] Refresh complete!")
+        elapsed = int(_time_module.time() - datetime.fromisoformat(get_refresh_job(job_id)["started_at"]).timestamp())
+        update_refresh_job(
+            job_id,
+            status='completed',
+            duration_sec=elapsed,
+            completed_at=datetime.utcnow().isoformat()
+        )
+
+    except Exception as e:
+        logger.exception(f"[RefreshJob {job_id}] Background refresh failed: {e}")
+        update_refresh_job(
+            job_id,
+            status='failed',
+            error_message=str(e)[:500],
+            completed_at=datetime.utcnow().isoformat()
+        )
+
+
+def get_refresh_job(job_id):
+    """Fetch refresh job details (for polling endpoint)."""
+    from app.database import get_refresh_job as db_get_refresh_job
+    return db_get_refresh_job(job_id)

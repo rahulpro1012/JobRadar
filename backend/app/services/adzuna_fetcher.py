@@ -11,6 +11,7 @@ preserve the monthly quota.
 API docs: https://api.adzuna.com/
 """
 import json
+import re
 import time
 import logging
 import requests
@@ -78,11 +79,14 @@ def fetch_adzuna_jobs(
     pf = ProfileFilter(profile)
     exp_years = int(profile.get("experience_years", 2))
 
-    # Pick top-tier queries, deduplicated
+    # Pick top-tier queries, deduplicated, with city names stripped
+    # (we're rotating through SEARCH_LOCATIONS in the location param, so redundancy wastes calls)
     query_texts = []
     seen = set()
     for q in queries:
         text = q["query"] if isinstance(q, dict) else q
+        # Strip city names to avoid "Java Pune" × location="Pune" redundancy
+        text = _strip_city_names(text)
         if text.lower() not in seen:
             seen.add(text.lower())
             query_texts.append(text)
@@ -162,6 +166,44 @@ def fetch_adzuna_jobs(
         f"locations: {SEARCH_LOCATIONS})"
     )
     return all_jobs
+
+
+def _strip_city_names(query: str) -> str:
+    """
+    Remove city names from query to avoid redundancy with location param.
+    Example: "Java Developer Pune" → "Java Developer"
+    This prevents wasting API calls on redundant city×query combinations.
+    """
+    # Remove Indian city names (case-insensitive)
+    cities = ["pune", "bangalore", "mumbai", "delhi", "hyderabad", "ahmedabad", "kolkata"]
+    q_lower = query.lower()
+    for city in cities:
+        q_lower = re.sub(rf"\b{city}\b", "", q_lower)
+    # Clean up extra spaces and return original-cased version (minus the removed cities)
+    result = " ".join(q_lower.split()).strip()
+    return query.replace(query.lower(), result) if result else query
+
+
+def _normalise(raw: dict) -> dict:
+    """Normalize Adzuna API response to canonical job dict."""
+    company_obj = raw.get("company") or {}
+    location_obj = raw.get("location") or {}
+    return {
+        "title": (raw.get("title") or "")[:150],
+        "company": (company_obj.get("display_name") or "")[:100],
+        "location": (location_obj.get("display_name") or "Various")[:100],
+        "source_url": raw.get("redirect_url", ""),
+        "source_domain": "adzuna.com",
+        "description_snippet": (raw.get("description") or "")[:300],
+        "posted_date": raw.get("created", ""),
+        "skills_found": json.dumps([]),
+    }
+
+
+def _profile_matches(job: dict, pf: "ProfileFilter") -> bool:
+    """Check if job matches user's profile using ProfileFilter."""
+    keep, _ = pf.should_keep(job["title"], job["description_snippet"])
+    return keep
 
 
 def _normalise(r: dict) -> dict:

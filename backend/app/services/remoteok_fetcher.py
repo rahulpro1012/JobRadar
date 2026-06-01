@@ -7,7 +7,7 @@ We filter for India-eligible remote positions and run through ProfileFilter.
 
 Docs: https://remoteok.com/api
 """
-import json as _json
+import json
 import time
 import logging
 import requests
@@ -51,7 +51,7 @@ def fetch_remoteok_jobs(profile: dict, delay: float = 1.0) -> list:
             verify=False,
         )
         resp.raise_for_status()
-        raw = _json.loads(resp.content.decode('utf-8', errors='replace'))
+        raw = json.loads(resp.content.decode('utf-8', errors='replace'))
     except Exception as e:
         record_failure(SOURCE_NAME, str(e))
         logger.warning(f"[{SOURCE_NAME}] fetch error: {e}")

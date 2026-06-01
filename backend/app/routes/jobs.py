@@ -224,3 +224,172 @@ def refresh_jobs():
         })
     except Exception as e:
         return jsonify({"error": f"Refresh failed: {str(e)}"}), 500
+
+
+# ============================================================
+# Phase 2: Async Refresh Endpoints (Background Jobs + Polling)
+# ============================================================
+
+@jobs_bp.route("/jobs/refresh-async", methods=["POST"])
+def refresh_jobs_async():
+    """
+    Kick off an async refresh job.
+    Returns immediately with job_id for polling.
+
+    Response (202 Accepted):
+    {
+      "job_id": "uuid",
+      "status": "started",
+      "poll_url": "/api/jobs/refresh-async/uuid"
+    }
+    """
+    profile = execute_query("SELECT * FROM profiles ORDER BY id DESC LIMIT 1", fetch_one=True)
+    if not profile:
+        return jsonify({"error": "No profile found. Upload a resume first."}), 400
+
+    from flask import current_app
+    from app.services.job_fetcher import trigger_async_refresh
+
+    try:
+        # Generate AI queries if available
+        try:
+            from app.services.ai_agent import ai_generate_queries, is_ai_enabled
+            if is_ai_enabled():
+                search_locations = []
+                loc = profile.get("location", "")
+                if loc:
+                    search_locations.append(loc)
+
+                extra_locs = profile.get("search_locations", "")
+                if extra_locs:
+                    import json as _json
+                    if isinstance(extra_locs, str):
+                        try:
+                            extra_locs = _json.loads(extra_locs)
+                        except (ValueError, TypeError):
+                            extra_locs = [x.strip() for x in extra_locs.split(",") if x.strip()]
+                    if isinstance(extra_locs, list):
+                        search_locations.extend(extra_locs)
+
+                if "India" not in search_locations:
+                    search_locations.append("India")
+                if "Remote" not in search_locations:
+                    search_locations.append("Remote")
+
+                ai_queries = ai_generate_queries(profile, search_locations=search_locations)
+                if ai_queries:
+                    current_app.config["_ai_queries"] = ai_queries
+        except Exception as e:
+            logger.info(f"AI query generation skipped: {e}")
+
+        # Trigger background job
+        job_id = trigger_async_refresh(profile, current_app.config)
+
+        return jsonify({
+            "job_id": job_id,
+            "status": "started",
+            "poll_url": f"/api/jobs/refresh-async/{job_id}"
+        }), 202
+
+    except Exception as e:
+        logger.exception(f"Failed to start async refresh: {e}")
+        return jsonify({"error": f"Failed to start refresh: {str(e)}"}), 500
+
+
+@jobs_bp.route("/jobs/refresh-async/<job_id>", methods=["GET"])
+def get_refresh_status(job_id):
+    """
+    Poll endpoint: Get refresh job progress.
+
+    Response while running:
+    {
+      "job_id": "uuid",
+      "status": "running",
+      "elapsed_sec": 12,
+      "sources_done": 6,
+      "sources_total": 14,
+      "jobs_fetched": 312,
+      "per_source": {...}
+    }
+
+    Response when complete:
+    {
+      "job_id": "uuid",
+      "status": "completed",
+      "duration_sec": 48,
+      "jobs_fetched": 643,
+      "jobs_new": 10,
+      "jobs_ai_scored": 16
+    }
+    """
+    from app.services.job_fetcher import get_refresh_job
+    from datetime import datetime as dt
+
+    job = get_refresh_job(job_id)
+    if not job:
+        return jsonify({"error": "Refresh job not found"}), 404
+
+    started_dt = dt.fromisoformat(job["started_at"])
+    elapsed = int((dt.utcnow() - started_dt).total_seconds())
+
+    response = {
+        "job_id": job_id,
+        "status": job["status"],
+        "started_at": job["started_at"],
+        "elapsed_sec": elapsed,
+        "sources_total": job["sources_total"],
+        "sources_done": job["sources_done"],
+        "sources_failed": job["sources_failed"],
+        "jobs_fetched": job["jobs_fetched"],
+        "jobs_new": job["jobs_new"],
+    }
+
+    # Include per-source breakdown if available
+    if job["per_source_json"]:
+        try:
+            import json as _json
+            response["per_source"] = _json.loads(job["per_source_json"])
+        except Exception:
+            response["per_source"] = {}
+
+    # Include completion details if done
+    if job["status"] in ("completed", "failed"):
+        response["duration_sec"] = job["duration_sec"]
+        response["jobs_ai_scored"] = job["jobs_ai_scored"]
+        if job["error_message"]:
+            response["error_message"] = job["error_message"]
+
+    return jsonify(response), 200
+
+
+@jobs_bp.route("/jobs/refresh-async/latest", methods=["GET"])
+def get_latest_refresh():
+    """
+    Convenience endpoint: Get the most recent refresh job.
+    Useful if frontend reconnects mid-refresh.
+    """
+    from app.database import get_latest_refresh_job
+    from datetime import datetime as dt
+
+    job = get_latest_refresh_job()
+    if not job:
+        return jsonify({"error": "No refresh jobs found"}), 404
+
+    started_dt = dt.fromisoformat(job["started_at"])
+    elapsed = int((dt.utcnow() - started_dt).total_seconds())
+
+    response = {
+        "job_id": job["id"],
+        "status": job["status"],
+        "started_at": job["started_at"],
+        "elapsed_sec": elapsed,
+        "sources_total": job["sources_total"],
+        "sources_done": job["sources_done"],
+        "jobs_fetched": job["jobs_fetched"],
+    }
+
+    if job["status"] in ("completed", "failed"):
+        response["duration_sec"] = job["duration_sec"]
+        response["jobs_ai_scored"] = job["jobs_ai_scored"]
+
+    return jsonify(response), 200

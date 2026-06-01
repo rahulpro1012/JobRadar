@@ -145,6 +145,28 @@ CREATE TABLE IF NOT EXISTS source_health_log (
     timestamp TIMESTAMP NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Phase 2: Background refresh job tracking (async refresh + polling)
+CREATE TABLE IF NOT EXISTS refresh_jobs (
+    id TEXT PRIMARY KEY,
+    status TEXT NOT NULL DEFAULT 'pending',
+    started_at TIMESTAMP NOT NULL,
+    completed_at TIMESTAMP,
+    duration_sec INTEGER,
+
+    sources_total INTEGER DEFAULT 0,
+    sources_done INTEGER DEFAULT 0,
+    sources_failed INTEGER DEFAULT 0,
+
+    jobs_fetched INTEGER DEFAULT 0,
+    jobs_new INTEGER DEFAULT 0,
+    jobs_ai_scored INTEGER DEFAULT 0,
+
+    per_source_json TEXT,
+    error_message TEXT,
+
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Indexes for common queries
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
 CREATE INDEX IF NOT EXISTS idx_jobs_match_score ON jobs(match_score DESC);
@@ -155,6 +177,7 @@ CREATE INDEX IF NOT EXISTS idx_quota_date ON quota_usage(date);
 CREATE INDEX IF NOT EXISTS idx_search_cache_expires ON search_cache(expires_at);
 CREATE INDEX IF NOT EXISTS idx_search_cache_source ON search_cache(source);
 CREATE INDEX IF NOT EXISTS idx_health_log_source_time ON source_health_log(source, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_refresh_jobs_started ON refresh_jobs(started_at DESC);
 """
 
 # Default company career page registry (Indian IT + product companies)
@@ -321,3 +344,52 @@ def increment_quota(source, date=None):
             DO UPDATE SET calls_used = calls_used + 1
         """, (source, date))
         conn.commit()
+
+
+# ============================================================
+# Phase 2: Refresh Job Tracking (Async Background Jobs)
+# ============================================================
+
+def create_refresh_job(job_id, sources_total=16):
+    """Create a new refresh job record with 'pending' status."""
+    with get_connection() as conn:
+        conn.execute("""
+            INSERT INTO refresh_jobs (id, status, started_at, sources_total)
+            VALUES (?, 'pending', ?, ?)
+        """, (job_id, datetime.utcnow().isoformat(), sources_total))
+        conn.commit()
+
+
+def get_refresh_job(job_id):
+    """Fetch a refresh job record."""
+    return execute_query(
+        "SELECT * FROM refresh_jobs WHERE id = ?",
+        (job_id,),
+        fetch_one=True
+    )
+
+
+def update_refresh_job(job_id, **updates):
+    """Update refresh job fields (status, jobs_fetched, per_source_json, etc.)."""
+    allowed_fields = {
+        'status', 'sources_done', 'sources_failed', 'jobs_fetched',
+        'jobs_new', 'jobs_ai_scored', 'per_source_json', 'error_message',
+        'completed_at', 'duration_sec'
+    }
+    updates = {k: v for k, v in updates.items() if k in allowed_fields}
+    if not updates:
+        return
+
+    with get_connection() as conn:
+        cols = ', '.join(f'{k} = ?' for k in updates.keys())
+        values = list(updates.values()) + [job_id]
+        conn.execute(f"UPDATE refresh_jobs SET {cols} WHERE id = ?", values)
+        conn.commit()
+
+
+def get_latest_refresh_job():
+    """Get the most recent refresh job."""
+    return execute_query(
+        "SELECT * FROM refresh_jobs ORDER BY started_at DESC LIMIT 1",
+        fetch_one=True
+    )
