@@ -19,6 +19,10 @@ Layer 14:  Adzuna India (free key required — India aggregator with salary data
 ── Phase 2 additions ──
 Layer 15:  Workable ATS (free, no key — remote-first startups)
 Layer 16:  SmartRecruiters ATS (free, no key — enterprise companies)
+Layer 17:  Recruitee ATS (free, no key — European startups)
+── Phase 3 additions ──
+Layer 18:  LinkedIn jobs-guest (free, no auth — India + Remote jobs)
+Layer 19:  Naukri JSON API (undocumented, India-specific)
 """
 import re
 import time
@@ -74,19 +78,21 @@ def fetch_all_jobs(profile, config):
 
     # ── ATS Sources (parallel internally, now part of parallel pool) ──
     def _get_ats_jobs():
-        """Fetch from Greenhouse, Lever, Ashby, Workable, SmartRecruiters in parallel."""
+        """Fetch from Greenhouse, Lever, Ashby, Workable, SmartRecruiters, Recruitee in parallel."""
         from app.services.ats_fetcher import fetch_greenhouse_jobs, fetch_lever_jobs, fetch_ashby_jobs
         from app.services.workable_fetcher import fetch_workable_jobs
         from app.services.smartrecruiters_fetcher import fetch_smartrecruiters_jobs
+        from app.services.recruitee_fetcher import fetch_recruitee_jobs
 
         ats_jobs = []
-        with ThreadPoolExecutor(max_workers=5) as ats_executor:
+        with ThreadPoolExecutor(max_workers=6) as ats_executor:
             ats_futures = {
                 ats_executor.submit(fetch_greenhouse_jobs, profile, 0.15): "Greenhouse",
                 ats_executor.submit(fetch_lever_jobs, profile, 0.15): "Lever",
                 ats_executor.submit(fetch_ashby_jobs, profile, 0.15): "Ashby",
                 ats_executor.submit(fetch_workable_jobs, profile, 0.3): "Workable",
                 ats_executor.submit(fetch_smartrecruiters_jobs, profile, 0.3): "SmartRecruiters",
+                ats_executor.submit(fetch_recruitee_jobs, profile, 0.3): "Recruitee",
             }
             for future in as_completed(ats_futures):
                 try:
@@ -96,7 +102,7 @@ def fetch_all_jobs(profile, config):
                     logger.warning(f"{ats_futures[future]} failed: {e}")
         return ats_jobs
 
-    layers.append(("ATS (Greenhouse/Lever/Ashby/Workable/SmartRecruiters)", _get_ats_jobs, {}))
+    layers.append(("ATS (Greenhouse/Lever/Ashby/Workable/SmartRecruiters/Recruitee)", _get_ats_jobs, {}))
 
     # ── Layer 3: Jooble ──
     jooble_key = config.get("JOOBLE_API_KEY", "")
@@ -164,6 +170,25 @@ def fetch_all_jobs(profile, config):
         from app.services.adzuna_fetcher import fetch_adzuna_jobs
         layers.append(("Adzuna", fetch_adzuna_jobs, {"profile": profile, "queries": queries, "config": config, "delay": scrape_delay}))
 
+    # ── Layer 18: LinkedIn jobs-guest ──
+    from app.services.linkedin_guest_fetcher import fetch_linkedin_guest_jobs
+    linkedin_queries = [q["query"] if isinstance(q, dict) else q for q in queries]
+    layers.append(("LinkedIn Guest", fetch_linkedin_guest_jobs, {"profile": profile, "queries": linkedin_queries, "location": "Pune", "max_pages": 2}))
+
+    # ── Layer 19: Naukri JSON API ──
+    from app.services.naukri_fetcher import fetch_naukri_jobs
+    naukri_queries = [q["query"] if isinstance(q, dict) else q for q in queries]
+    # Fetch for multiple locations
+    for naukri_loc in ["pune", "delhi", "bangalore", "mumbai"]:
+        layers.append((f"Naukri ({naukri_loc.title()})", fetch_naukri_jobs, {"profile": profile, "queries": naukri_queries, "location": naukri_loc, "max_pages": 1}))
+
+    # ── Layer 20: Brave Search (optional, requires API key) ──
+    brave_key = config.get("BRAVE_SEARCH_API_KEY", "")
+    if brave_key:
+        from app.services.brave_search_fetcher import fetch_brave_search_jobs
+        brave_queries = [q["query"] if isinstance(q, dict) else q for q in queries]
+        layers.append(("Brave Search", fetch_brave_search_jobs, {"profile": profile, "queries": brave_queries, "api_key": brave_key, "max_results": 20}))
+
     # ═══════════════════════════════════════════════════════════════
     # RUN ALL LAYERS IN PARALLEL
     # ═══════════════════════════════════════════════════════════════
@@ -189,6 +214,27 @@ def fetch_all_jobs(profile, config):
 
     logger.info(f"Phase 1 complete: {len(all_jobs)} total jobs from {len(layers)} layers")
     logger.debug(f"Per-layer timing: {layer_timings}")
+
+    # ── Phase 2: Persistent Company Discovery ──
+    # Auto-grow ATS registry by probing companies found in search results
+    try:
+        from app.services.company_discovery import discover_company_batch
+        search_source_jobs = [
+            j for j in all_jobs
+            if j.get("source_domain") in (
+                "linkedin.com",
+                "naukri.com",
+                "brave.com",
+                "searxng",
+                "yahoo.com",
+            )
+        ]
+        if search_source_jobs:
+            discovered = discover_company_batch(search_source_jobs, batch_delay=0.05)
+            if discovered > 0:
+                logger.info(f"Phase 2: Company discovery found {discovered} new companies")
+    except Exception as e:
+        logger.warning(f"Phase 2 (company discovery) error: {e}")
 
     # ── Maintenance: purge stale cache entries ──
     try:

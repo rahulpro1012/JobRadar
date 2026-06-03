@@ -1,6 +1,7 @@
 """
 JobRadar Query Engine (AI-Enhanced)
 Generates tiered search queries + merges AI-generated queries.
+Includes automatic deduplication to reduce redundant API calls.
 """
 
 
@@ -87,7 +88,22 @@ def generate_queries(profile, ai_queries=None):
     if loc and core_skills:
         _add(f"software developer {core_skills[0]} jobs {loc}", 3)
 
-    return queries[:15]  # Increased cap to accommodate AI queries
+    # ── Apply query deduplication to reduce API calls ──
+    from app.services.query_dedup import dedup_queries
+    query_texts = [q["query"] for q in queries[:15]]
+    deduped_texts = dedup_queries(query_texts)
+    deduped_set = set(t.lower().strip() for t in deduped_texts)
+
+    # Keep only deduplicated queries, preserving order and tier info
+    result = []
+    seen_dedup = set()
+    for q in queries:
+        q_norm = q["query"].lower().strip()
+        if q_norm in deduped_set and q_norm not in seen_dedup:
+            result.append(q)
+            seen_dedup.add(q_norm)
+
+    return result
 
 
 def generate_site_queries(queries, sites=None):
