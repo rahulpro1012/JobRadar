@@ -65,6 +65,7 @@ def fetch_workable_jobs(profile: dict, delay: float = 0.3) -> list:
                 record_failure(SOURCE_NAME, f"{slug}: HTTP {resp.status_code}")
                 continue
             data = resp.json()
+            logger.info(f"[{SOURCE_NAME}] raw keys: {list(data.keys())}, sample: {json.dumps(data)[:300]}")
         except Exception as e:
             record_failure(SOURCE_NAME, f"{slug}: {e}")
             logger.warning(f"[{SOURCE_NAME}] {slug} error: {e}")

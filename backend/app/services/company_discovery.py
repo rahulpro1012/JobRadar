@@ -58,16 +58,16 @@ def discover_company(company_name: str, background: bool = True) -> str:
         return ""
 
     try:
-        conn = get_connection()
-        # Skip if already discovered
-        row = conn.execute(
-            "SELECT ats FROM company_registry WHERE slug = ?",
-            (slug,)
-        ).fetchone()
+        with get_connection() as conn:
+            # Skip if already discovered
+            row = conn.execute(
+                "SELECT ats FROM company_registry WHERE slug = ?",
+                (slug,)
+            ).fetchone()
 
-        if row:
-            logger.debug(f"[discovery] {company_name} already registered on {row['ats']}")
-            return row["ats"]
+            if row:
+                logger.debug(f"[discovery] {company_name} already registered on {row['ats']}")
+                return row["ats"]
     except Exception as e:
         logger.debug(f"[discovery] DB check failed: {e}")
         return ""
@@ -133,16 +133,16 @@ def get_discovered_companies(limit: int = 50) -> list:
         List of dicts: {slug, name, ats, discovered_at, job_count}
     """
     try:
-        conn = get_connection()
-        rows = conn.execute("""
-            SELECT slug, name, ats, discovered_at, job_count
-            FROM company_registry
-            WHERE discovered_at IS NOT NULL
-            ORDER BY discovered_at DESC
-            LIMIT ?
-        """, (limit,)).fetchall()
+        with get_connection() as conn:
+            rows = conn.execute("""
+                SELECT slug, name, ats, discovered_at, job_count
+                FROM company_registry
+                WHERE discovered_at IS NOT NULL
+                ORDER BY discovered_at DESC
+                LIMIT ?
+            """, (limit,)).fetchall()
 
-        return [dict(row) for row in rows]
+            return [dict(row) for row in rows]
     except Exception as e:
         logger.warning(f"[discovery] failed to fetch discovered companies: {e}")
         return []
@@ -210,14 +210,14 @@ def _persist_discovery(slug: str, company_name: str, ats: str) -> None:
     Save discovered company to registry (idempotent via INSERT OR IGNORE).
     """
     try:
-        conn = get_connection()
-        conn.execute("""
-            INSERT OR IGNORE INTO company_registry
-            (slug, name, ats, discovered_at)
-            VALUES (?, ?, ?, ?)
-        """, (slug, company_name, ats, datetime.utcnow().isoformat()))
-        conn.commit()
-        logger.debug(f"[discovery] Persisted {company_name} ({ats})")
+        with get_connection() as conn:
+            conn.execute("""
+                INSERT OR IGNORE INTO company_registry
+                (slug, name, ats, discovered_at)
+                VALUES (?, ?, ?, ?)
+            """, (slug, company_name, ats, datetime.utcnow().isoformat()))
+            conn.commit()
+            logger.debug(f"[discovery] Persisted {company_name} ({ats})")
     except Exception as e:
         logger.warning(f"[discovery] Failed to persist {company_name}: {e}")
 
@@ -231,21 +231,21 @@ def reset_discovery_history(before_days: int = 30) -> int:
         Number of records deleted.
     """
     try:
-        conn = get_connection()
-        from datetime import timedelta
+        with get_connection() as conn:
+            from datetime import timedelta
 
-        cutoff = (datetime.utcnow() - timedelta(days=before_days)).isoformat()
+            cutoff = (datetime.utcnow() - timedelta(days=before_days)).isoformat()
 
-        cursor = conn.execute("""
-            DELETE FROM company_registry
-            WHERE discovered_at < ? AND discovered_at IS NOT NULL
-        """, (cutoff,))
+            cursor = conn.execute("""
+                DELETE FROM company_registry
+                WHERE discovered_at < ? AND discovered_at IS NOT NULL
+            """, (cutoff,))
 
-        count = cursor.rowcount
-        conn.commit()
+            count = cursor.rowcount
+            conn.commit()
 
-        logger.info(f"[discovery] Reset {count} discoveries older than {before_days} days")
-        return count
+            logger.info(f"[discovery] Reset {count} discoveries older than {before_days} days")
+            return count
     except Exception as e:
         logger.warning(f"[discovery] Reset failed: {e}")
         return 0

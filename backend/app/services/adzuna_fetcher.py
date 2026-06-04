@@ -97,6 +97,7 @@ def fetch_adzuna_jobs(
     max_calls = min(MAX_QUERIES_PER_REFRESH * len(SEARCH_LOCATIONS), remaining_quota)
 
     for query_text in query_texts[:MAX_QUERIES_PER_REFRESH]:
+        query_text = _clean_for_adzuna(query_text)
         if calls_made >= max_calls:
             break
 
@@ -166,6 +167,38 @@ def fetch_adzuna_jobs(
         f"locations: {SEARCH_LOCATIONS})"
     )
     return all_jobs
+
+
+def _clean_for_adzuna(query: str) -> str:
+    """
+    Clean query for Adzuna API: strip quotes, city names, filler words, truncate to 5 words.
+    Example: "Java" "Spring Boot" Developer Pune with experience → Java Spring Boot Developer
+    """
+    if not query:
+        return ""
+
+    q = query.strip()
+
+    # Remove all quotes (both " and ')
+    q = q.replace('"', '').replace("'", '')
+
+    # Remove Indian city names
+    cities = ["pune", "bangalore", "mumbai", "delhi", "hyderabad", "ahmedabad", "kolkata", "remote", "india"]
+    q_lower = q.lower()
+    for city in cities:
+        q_lower = re.sub(rf"\b{city}\b", "", q_lower)
+
+    # Remove common filler words
+    fillers = ["with", "in", "for", "expertise", "required", "experience", "position", "role", "job"]
+    words = q_lower.split()
+    words = [w for w in words if w.lower() not in fillers and w.strip()]
+
+    # Keep only first 5 words
+    words = words[:5]
+
+    # Clean up and return
+    result = " ".join(words).strip()
+    return result if result else query
 
 
 def _strip_city_names(query: str) -> str:

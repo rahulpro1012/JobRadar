@@ -78,21 +78,19 @@ def fetch_all_jobs(profile, config):
 
     # ── ATS Sources (parallel internally, now part of parallel pool) ──
     def _get_ats_jobs():
-        """Fetch from Greenhouse, Lever, Ashby, Workable, SmartRecruiters, Recruitee in parallel."""
+        """Fetch from Greenhouse, Lever, Ashby, Workable, SmartRecruiters in parallel."""
         from app.services.ats_fetcher import fetch_greenhouse_jobs, fetch_lever_jobs, fetch_ashby_jobs
         from app.services.workable_fetcher import fetch_workable_jobs
         from app.services.smartrecruiters_fetcher import fetch_smartrecruiters_jobs
-        from app.services.recruitee_fetcher import fetch_recruitee_jobs
 
         ats_jobs = []
-        with ThreadPoolExecutor(max_workers=6) as ats_executor:
+        with ThreadPoolExecutor(max_workers=5) as ats_executor:
             ats_futures = {
                 ats_executor.submit(fetch_greenhouse_jobs, profile, 0.15): "Greenhouse",
                 ats_executor.submit(fetch_lever_jobs, profile, 0.15): "Lever",
                 ats_executor.submit(fetch_ashby_jobs, profile, 0.15): "Ashby",
                 ats_executor.submit(fetch_workable_jobs, profile, 0.3): "Workable",
                 ats_executor.submit(fetch_smartrecruiters_jobs, profile, 0.3): "SmartRecruiters",
-                ats_executor.submit(fetch_recruitee_jobs, profile, 0.3): "Recruitee",
             }
             for future in as_completed(ats_futures):
                 try:
@@ -102,7 +100,7 @@ def fetch_all_jobs(profile, config):
                     logger.warning(f"{ats_futures[future]} failed: {e}")
         return ats_jobs
 
-    layers.append(("ATS (Greenhouse/Lever/Ashby/Workable/SmartRecruiters/Recruitee)", _get_ats_jobs, {}))
+    layers.append(("ATS (Greenhouse/Lever/Ashby/Workable/SmartRecruiters)", _get_ats_jobs, {}))
 
     # ── Layer 3: Jooble ──
     jooble_key = config.get("JOOBLE_API_KEY", "")

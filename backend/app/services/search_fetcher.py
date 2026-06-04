@@ -71,7 +71,7 @@ def fetch_from_searxng(queries, delay=1.5):
                     "language": "en",
                 },
                 headers={"User-Agent": "JobRadar/1.0"},
-                timeout=8,
+                timeout=30,
                 verify=False,
             )
             increment_quota("searxng")

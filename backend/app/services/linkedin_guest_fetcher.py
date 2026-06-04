@@ -57,7 +57,7 @@ def fetch_linkedin_guest_jobs(
     queries: list[str] = None,
     location: str = "Pune",
     max_pages: int = 2,
-    delay_range: tuple = (3, 6),
+    delay_range: tuple = (5, 10),
 ) -> list:
     """
     Fetch jobs from LinkedIn jobs-guest endpoint with strict rate limiting.
@@ -90,6 +90,10 @@ def fetch_linkedin_guest_jobs(
     all_jobs = []
 
     for query in queries:
+        # Strip quotes and filler, truncate to 5 words
+        query = query.replace('"', '').replace("'", "")
+        query = " ".join(query.split()[:5])
+
         # Check cache first
         cached = cache_get(SOURCE_NAME, query, location, ttl_hours=6)
         if cached is not None:
@@ -105,7 +109,7 @@ def fetch_linkedin_guest_jobs(
                 params = {
                     "keywords": query,
                     "location": location,
-                    "f_TPR": TIME_FILTERS["month"],  # Last 30 days
+                    "f_TPR": TIME_FILTERS["week"],  # Last 7 days (was month)
                     "f_WT": WORK_TYPES["remote"],    # Remote jobs only
                     "start": page * 25,
                 }

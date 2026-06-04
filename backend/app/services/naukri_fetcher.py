@@ -78,6 +78,9 @@ def fetch_naukri_jobs(
     all_jobs = []
 
     for query in queries:
+        # Strip quotes from query
+        query = query.replace('"', '').replace("'", "")
+
         # Check cache first
         cached = cache_get(SOURCE_NAME, query, location, ttl_hours=6)
         if cached is not None:
@@ -102,13 +105,15 @@ def fetch_naukri_jobs(
                 "k": query,                     # Duplicate keyword param
             }
 
-            # Required headers (appid=109, systemid=Naukri)
+            # Headers with appid/systemid and additional browser headers for compatibility
             headers = {
                 "appid": "109",
                 "systemid": "Naukri",
+                "Accept": "application/json, text/plain, */*",
                 "User-Agent": random.choice(USER_AGENTS),
-                "Accept": "application/json",
                 "Accept-Language": "en-US,en;q=0.9",
+                "Referer": "https://www.naukri.com/",
+                "X-Requested-With": "XMLHttpRequest",
             }
 
             resp = requests.get(
