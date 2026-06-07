@@ -131,22 +131,58 @@ def fetch_remoteok_jobs(profile: dict, delay: float = 1.0) -> list:
 
 def _india_eligible(location_str: str, description: str = "") -> bool:
     """
-    Return True for Worldwide / Asia / blank locations.
+    Return True for India / Worldwide / Asia / blank locations.
     Return False for explicit geo-restrictions that exclude India.
     Checks both the location field and description — RemoteOK often puts
     geo-restrictions like "US only" in the description, not the location field.
+
+    Priority Item 4: Enhanced geo-filtering to reject non-India jobs
     """
     combined = (location_str + " " + description).lower()
-    if not combined.strip():
-        return True  # blank = assume worldwide remote
+
+    # Reject explicit non-India geos
     _BLOCKLIST = [
+        # US specific
         "us only", "usa only", "united states only", "must be based in the us",
-        "must be located in", "must reside in the us", "must work us hours",
-        "eu only", "europe only", "uk only", "must be in the uk",
-        "canada only", "australia only", "latin america only",
+        "must be located in the us", "must reside in the us", "must work us hours",
         "must be authorized to work in the us",
+        # Europe/UK
+        "eu only", "europe only", "europe based", "european only",
+        "uk only", "united kingdom only", "must be in the uk", "must be in the eu",
+        # Other regions
+        "canada only", "australia only", "latin america only",
+        # State/city level US filters
+        "new york", "san francisco", "california", "texas", "florida",
+        "new jersey", "massachusetts", "washington state",
+        # Work hours
+        "us business hours", "eastern time", "pacific time",
     ]
-    return not any(b in combined for b in _BLOCKLIST)
+
+    # If blank, assume worldwide
+    if not combined.strip():
+        return True
+
+    # Reject if any blocklist item matches
+    if any(b in combined for b in _BLOCKLIST):
+        return False
+
+    # Whitelist India, Worldwide, Asia, Remote (no geo)
+    _ALLOWLIST = [
+        "india", "remote", "worldwide", "global", "asia", "asia-pacific",
+        "apac", "asia pacific", "international", "any timezone",
+    ]
+
+    # If allowlist match found, definitely keep
+    if any(a in combined for a in _ALLOWLIST):
+        return True
+
+    # Blank location is OK (assume worldwide)
+    if not location_str.strip():
+        return True
+
+    # If description has blocklist but location doesn't mention exclusion, keep it
+    # (conservative: if location says something, but it's not explicitly rejected, allow)
+    return True
 
 
 def _strip_html(text: str) -> str:

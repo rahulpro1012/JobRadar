@@ -21,15 +21,17 @@ logger = logging.getLogger(__name__)
 SOURCE_NAME = "smartrecruiters"
 
 SMARTRECRUITERS_COMPANIES = [
-    "bosch",
-    "visa",
-    "ibm",
-    "sap",
-    "unilever",
-    "zalando",
-    "booking",
-    "trivago",
-    "klarna",
+    # Replaced enterprise companies with active mid-market tech + fintech companies
+    "adobe",           # Active hiring, engineering-heavy
+    "shopify",         # Platform company, many eng roles
+    "slack",           # High hiring volume
+    "stripe",          # Financial infrastructure (may overlap with Greenhouse but good backup)
+    "notion",          # Strong remote-first culture
+    "figma",           # Design + eng roles
+    "twilio",          # Communications platform
+    "elastic",         # Search/observability
+    "datadog",         # Observability, fast-growing
+    "github",          # Developer tools
 ]
 
 

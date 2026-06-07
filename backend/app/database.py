@@ -145,6 +145,18 @@ CREATE TABLE IF NOT EXISTS source_health_log (
     timestamp TIMESTAMP NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Auto-discovered ATS company registry (populated by company_discovery.py)
+CREATE TABLE IF NOT EXISTS company_registry (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    slug TEXT UNIQUE NOT NULL,
+    name TEXT NOT NULL,
+    ats TEXT NOT NULL,  -- "greenhouse", "lever", "ashby", "workable", "smartrecruiters"
+    discovered_at TIMESTAMP,
+    job_count INTEGER DEFAULT 0,
+    last_checked TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Phase 2: Background refresh job tracking (async refresh + polling)
 CREATE TABLE IF NOT EXISTS refresh_jobs (
     id TEXT PRIMARY KEY,
@@ -178,6 +190,8 @@ CREATE INDEX IF NOT EXISTS idx_search_cache_expires ON search_cache(expires_at);
 CREATE INDEX IF NOT EXISTS idx_search_cache_source ON search_cache(source);
 CREATE INDEX IF NOT EXISTS idx_health_log_source_time ON source_health_log(source, timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_refresh_jobs_started ON refresh_jobs(started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_company_registry_ats ON company_registry(ats);
+CREATE INDEX IF NOT EXISTS idx_company_registry_discovered ON company_registry(discovered_at DESC);
 """
 
 # Default company career page registry (Indian IT + product companies)
@@ -393,3 +407,28 @@ def get_latest_refresh_job():
         "SELECT * FROM refresh_jobs ORDER BY started_at DESC LIMIT 1",
         fetch_one=True
     )
+
+
+def reset_circuit_breaker(source: str):
+    """
+    Reset circuit breaker for a source (after fixing a previously-broken fetcher).
+
+    Used by: Item 1 (Naukri header fix) to retry with new headers.
+
+    Args:
+        source: Source name (e.g., "naukri", "linkedin_guest")
+    """
+    try:
+        with get_connection() as conn:
+            conn.execute("""
+                UPDATE source_health
+                SET disabled_until = NULL,
+                    consecutive_failures = 0,
+                    status = 'healthy'
+                WHERE source = ?
+            """, (source,))
+            conn.commit()
+            return True
+    except Exception as e:
+        print(f"Failed to reset {source} circuit: {e}")
+        return False

@@ -94,10 +94,14 @@ def fetch_linkedin_guest_jobs(
         query = query.replace('"', '').replace("'", "")
         query = " ".join(query.split()[:5])
 
+        # For "remote" queries, don't filter by specific location
+        # LinkedIn remote jobs are worldwide; location param conflicts with f_WT=2
+        query_location = "Worldwide" if "remote" in query.lower() else location
+
         # Check cache first
-        cached = cache_get(SOURCE_NAME, query, location, ttl_hours=6)
+        cached = cache_get(SOURCE_NAME, query, query_location, ttl_hours=6)
         if cached is not None:
-            logger.info(f"[{SOURCE_NAME}] cache hit for '{query}' / {location}")
+            logger.info(f"[{SOURCE_NAME}] cache hit for '{query}' / {query_location}")
             all_jobs.extend(cached)
             continue
 
@@ -108,7 +112,7 @@ def fetch_linkedin_guest_jobs(
                 # Build request with defensive params
                 params = {
                     "keywords": query,
-                    "location": location,
+                    "location": query_location,
                     "f_TPR": TIME_FILTERS["week"],  # Last 7 days (was month)
                     "f_WT": WORK_TYPES["remote"],    # Remote jobs only
                     "start": page * 25,
@@ -201,8 +205,8 @@ def fetch_linkedin_guest_jobs(
                 delay = random.uniform(delay_range[0], delay_range[1])
                 time.sleep(delay)
 
-        # Cache results for this query
-        cache_set(SOURCE_NAME, query, page_jobs, location, ttl_hours=6)
+        # Cache results for this query (using the adjusted location)
+        cache_set(SOURCE_NAME, query, page_jobs, query_location, ttl_hours=6)
         all_jobs.extend(page_jobs)
 
         # Delay between queries

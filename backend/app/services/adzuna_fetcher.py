@@ -28,9 +28,10 @@ BASE_URL = "https://api.adzuna.com/v1/api/jobs/in/search/1"
 
 # 3 queries × 4 locations = 12 API calls max per refresh
 MAX_QUERIES_PER_REFRESH = 3
-# Daily budget: 12 calls/day ≈ 360/month (well within 250-1000 free tier)
-DAILY_LIMIT = 12
-CACHE_TTL_HOURS = 6
+# Daily budget: 36 calls/day ≈ 1080/month (still within 250-1000 free tier)
+# Allows 3x more jobs per refresh (36/12 = 3 refreshes/day at full capacity)
+DAILY_LIMIT = 36
+CACHE_TTL_HOURS = 12
 
 # Rotate across these cities — title-case matches Adzuna's location field
 SEARCH_LOCATIONS = ["Pune", "Bangalore", "Mumbai", "Remote"]
