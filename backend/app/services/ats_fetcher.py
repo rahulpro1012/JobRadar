@@ -92,6 +92,51 @@ ASHBY_COMPANIES = {
 
 
 # ============================================================
+# Dynamic Company Loading from Database
+# ============================================================
+
+def _load_companies_from_db(ats_name: str) -> dict:
+    """
+    Load companies for a specific ATS from the company_registry database table.
+    Falls back to hardcoded company lists if database is empty or unavailable.
+
+    Args:
+        ats_name: One of "greenhouse", "lever", "ashby", "workable", "smartrecruiters", "recruitee"
+
+    Returns:
+        Dict of {company_name: slug, ...} or fallback hardcoded dict
+    """
+    try:
+        from app.database import get_connection
+
+        with get_connection() as conn:
+            rows = conn.execute(
+                "SELECT name, slug FROM company_registry WHERE ats = ? ORDER BY job_count DESC",
+                (ats_name,)
+            ).fetchall()
+
+            if rows:
+                # Build company dict from database
+                companies = {row["name"]: row["slug"] for row in rows}
+                logger.debug(f"Loaded {len(companies)} companies for {ats_name} from database")
+                return companies
+    except Exception as e:
+        logger.debug(f"Failed to load {ats_name} companies from database: {e}")
+
+    # Fallback to hardcoded lists
+    fallback_map = {
+        "greenhouse": GREENHOUSE_COMPANIES,
+        "lever": LEVER_COMPANIES,
+        "ashby": ASHBY_COMPANIES,
+    }
+
+    fallback = fallback_map.get(ats_name, {})
+    if fallback:
+        logger.debug(f"Using hardcoded fallback: {len(fallback)} companies for {ats_name}")
+    return fallback
+
+
+# ============================================================
 # Dynamic Profile Filter
 # ============================================================
 
@@ -338,7 +383,10 @@ def fetch_greenhouse_jobs(profile, delay=0.2):
     kept = 0
     filtered = 0
 
-    for company_name, board_token in GREENHOUSE_COMPANIES.items():
+    # Load companies from database (with fallback to hardcoded list)
+    companies = _load_companies_from_db("greenhouse")
+
+    for company_name, board_token in companies.items():
         try:
             url = f"https://boards-api.greenhouse.io/v1/boards/{board_token}/jobs?content=true"
             resp = requests.get(url, verify=False, timeout=15, headers={
@@ -389,7 +437,7 @@ def fetch_greenhouse_jobs(profile, delay=0.2):
             logger.warning(f"Greenhouse {company_name} error: {e}")
             continue
 
-    logger.info(f"Greenhouse: {kept} kept, {filtered} filtered out, from {len(GREENHOUSE_COMPANIES)} companies")
+    logger.info(f"Greenhouse: {kept} kept, {filtered} filtered out, from {len(companies)} companies")
     return all_jobs
 
 
@@ -406,7 +454,10 @@ def fetch_lever_jobs(profile, delay=0.5):
     kept = 0
     filtered = 0
 
-    for company_name, slug in LEVER_COMPANIES.items():
+    # Load companies from database (with fallback to hardcoded list)
+    companies = _load_companies_from_db("lever")
+
+    for company_name, slug in companies.items():
         try:
             url = f"https://api.lever.co/v0/postings/{slug}?mode=json"
             resp = requests.get(url, verify=False, timeout=15, headers={
@@ -460,7 +511,7 @@ def fetch_lever_jobs(profile, delay=0.5):
             logger.warning(f"Lever {company_name} error: {e}")
             continue
 
-    logger.info(f"Lever: {kept} kept, {filtered} filtered out, from {len(LEVER_COMPANIES)} companies")
+    logger.info(f"Lever: {kept} kept, {filtered} filtered out, from {len(companies)} companies")
     return all_jobs
 
 
@@ -477,7 +528,10 @@ def fetch_ashby_jobs(profile, delay=0.5):
     kept = 0
     filtered = 0
 
-    for company_name, slug in ASHBY_COMPANIES.items():
+    # Load companies from database (with fallback to hardcoded list)
+    companies = _load_companies_from_db("ashby")
+
+    for company_name, slug in companies.items():
         try:
             url = f"https://api.ashbyhq.com/posting-api/job-board/{slug}?includeCompensation=true"
             resp = requests.get(url, verify=False, timeout=15, headers={
@@ -547,5 +601,5 @@ def fetch_ashby_jobs(profile, delay=0.5):
             logger.warning(f"Ashby {company_name} error: {e}")
             continue
 
-    logger.info(f"Ashby: {kept} kept, {filtered} filtered out, from {len(ASHBY_COMPANIES)} companies")
+    logger.info(f"Ashby: {kept} kept, {filtered} filtered out, from {len(companies)} companies")
     return all_jobs

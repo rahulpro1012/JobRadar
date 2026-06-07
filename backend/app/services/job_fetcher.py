@@ -23,6 +23,8 @@ Layer 17:  Recruitee ATS (free, no key — European startups)
 ── Phase 3 additions ──
 Layer 18:  LinkedIn jobs-guest (free, no auth — India + Remote jobs)
 Layer 19:  Naukri JSON API (undocumented, India-specific)
+── Tier 3a addition ──
+Layer 20:  Indian Unicorn Fetcher (SearxNG site: search on 35+ Indian unicorn careers pages)
 """
 import re
 import time
@@ -180,7 +182,11 @@ def fetch_all_jobs(profile, config):
     for naukri_loc in ["pune", "delhi", "bangalore", "mumbai"]:
         layers.append((f"Naukri ({naukri_loc.title()})", fetch_naukri_jobs, {"profile": profile, "queries": naukri_queries, "location": naukri_loc, "max_pages": 1}))
 
-    # ── Layer 20: Brave Search (optional, requires API key) ──
+    # ── Layer 20: Indian Unicorn Fetcher (Tier 3a) ──
+    from app.services.indian_unicorn_fetcher import fetch_indian_unicorns
+    layers.append(("Indian Unicorns", fetch_indian_unicorns, {"profile": profile, "max_companies": 20}))
+
+    # ── Layer 21: Brave Search (optional, requires API key) ──
     brave_key = config.get("BRAVE_SEARCH_API_KEY", "")
     if brave_key:
         from app.services.brave_search_fetcher import fetch_brave_search_jobs
