@@ -25,6 +25,12 @@ Layer 18:  LinkedIn jobs-guest (free, no auth — India + Remote jobs)
 Layer 19:  Naukri JSON API (undocumented, India-specific)
 ── Tier 3a addition ──
 Layer 20:  Indian Unicorn Fetcher (SearxNG site: search on 35+ Indian unicorn careers pages)
+── Tier 3b addition ──
+Layer 21:  Razorpay Direct (direct career page scraping)
+Layer 22:  Swiggy Direct (direct career page scraping)
+Layer 23:  CRED Direct (direct career page scraping)
+Layer 24:  PhonePe Direct (direct career page scraping)
+Layer 25:  Zomato Direct (direct career page scraping)
 """
 import re
 import time
@@ -186,7 +192,20 @@ def fetch_all_jobs(profile, config):
     from app.services.indian_unicorn_fetcher import fetch_indian_unicorns
     layers.append(("Indian Unicorns", fetch_indian_unicorns, {"profile": profile, "max_companies": 20}))
 
-    # ── Layer 21: Brave Search (optional, requires API key) ──
+    # ── Layers 21-25: Direct Career Page Scrapers (Tier 3b) ──
+    from app.services.scrapers.razorpay_scraper import fetch_razorpay
+    from app.services.scrapers.swiggy_scraper import fetch_swiggy
+    from app.services.scrapers.cred_scraper import fetch_cred
+    from app.services.scrapers.phonepe_scraper import fetch_phonepe
+    from app.services.scrapers.zomato_scraper import fetch_zomato
+
+    layers.append(("Razorpay Direct", fetch_razorpay, {"profile": profile}))
+    layers.append(("Swiggy Direct", fetch_swiggy, {"profile": profile}))
+    layers.append(("CRED Direct", fetch_cred, {"profile": profile}))
+    layers.append(("PhonePe Direct", fetch_phonepe, {"profile": profile}))
+    layers.append(("Zomato Direct", fetch_zomato, {"profile": profile}))
+
+    # ── Layer 26: Brave Search (optional, requires API key) ──
     brave_key = config.get("BRAVE_SEARCH_API_KEY", "")
     if brave_key:
         from app.services.brave_search_fetcher import fetch_brave_search_jobs
