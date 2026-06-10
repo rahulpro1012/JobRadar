@@ -286,10 +286,10 @@ def fetch_all_jobs(profile, config):
     logger.info(f"Phase 1 complete: {len(all_jobs)} total jobs from {len(layers)} layers")
     logger.debug(f"Per-layer timing: {layer_timings}")
 
-    # ── Phase 2: Persistent Company Discovery ──
+    # ── Phase 2: Persistent Company Discovery (Patch 2: Parallel) ──
     # Auto-grow ATS registry by probing companies found in search results
     try:
-        from app.services.company_discovery import discover_company_batch
+        from app.services.company_discovery import discover_companies_batch_parallel
         search_source_jobs = [
             j for j in all_jobs
             if j.get("source_domain") in (
@@ -301,9 +301,16 @@ def fetch_all_jobs(profile, config):
             )
         ]
         if search_source_jobs:
-            discovered = discover_company_batch(search_source_jobs, batch_delay=0.05)
-            if discovered > 0:
-                logger.info(f"Phase 2: Company discovery found {discovered} new companies")
+            # Extract company names (parallel function expects list of strings, not job dicts)
+            candidate_names = [j.get("company", "").strip() for j in search_source_jobs if j.get("company")]
+            # Remove duplicates while preserving order
+            candidate_names = list(dict.fromkeys(candidate_names))
+
+            if candidate_names:
+                result = discover_companies_batch_parallel(candidate_names, max_workers=8)
+                if result["discovered"] > 0:
+                    logger.info(f"Phase 2: Company discovery found {result['discovered']} new companies "
+                               f"(rejected {result['rejected']} garbage names)")
     except Exception as e:
         logger.warning(f"Phase 2 (company discovery) error: {e}")
 

@@ -116,37 +116,58 @@ def discover_company(company_name: str, background: bool = True) -> str:
         logger.debug(f"[discovery] DB check failed: {e}")
         return ""
 
-    # Try each ATS in priority order (most popular first)
-    ats_order = ["greenhouse", "lever", "ashby", "workable"]
+    # Patch 2: Probe all 4 ATSes concurrently
+    ats_list = ["greenhouse", "lever", "ashby", "workable"]
 
-    for ats in ats_order:
-        try:
-            url_fn = ATS_PROBES[ats]
-            url = url_fn(slug)
-
-            resp = requests.get(url, timeout=REQUEST_TIMEOUT, verify=False)
-
-            # Issue 2: Distinguish 0-jobs (status 200, empty response) from 404 (not found)
-            if resp.status_code == 200:
-                data = resp.json()
-                job_count = _count_jobs(data, ats)
-
-                # Status 200 = company exists on this ATS (whether or not it has jobs)
-                _persist_discovery(slug, company_name, ats, job_count)
-
-                if job_count > 0:
-                    logger.info(f"[discovery] Found {company_name} on {ats} with {job_count} jobs")
-                else:
-                    logger.debug(f"[discovery] Found {company_name} on {ats} (no current jobs)")
-
-                return ats
-        except requests.Timeout:
-            continue
-        except Exception:
-            continue
+    with ThreadPoolExecutor(max_workers=4, thread_name_prefix=f"probe-{slug[:10]}") as executor:
+        futures = {
+            executor.submit(_probe_ats, ats, slug): ats
+            for ats in ats_list
+        }
+        for future in as_completed(futures):
+            ats = futures[future]
+            try:
+                job_count = future.result(timeout=8)
+                if job_count is not None:
+                    # Found! Persist and return immediately
+                    _persist_discovery(slug, company_name, ats, job_count)
+                    if job_count > 0:
+                        logger.info(f"[discovery] Found {company_name} on {ats} with {job_count} jobs")
+                    else:
+                        logger.debug(f"[discovery] Found {company_name} on {ats} (no current jobs)")
+                    return ats
+            except Exception:
+                continue
 
     logger.debug(f"[discovery] {company_name} not found on any ATS")
     return ""
+
+
+def _probe_ats(ats: str, slug: str) -> int | None:
+    """
+    Probe a single ATS for a company slug. Returns job count if found (including 0),
+    None if not found (404).
+
+    Patch 2: Helper for parallel ATS discovery.
+    """
+    try:
+        url_fn = ATS_PROBES[ats]
+        url = url_fn(slug)
+
+        resp = requests.get(url, timeout=REQUEST_TIMEOUT, verify=False)
+
+        # Issue 2: Distinguish 0-jobs (status 200, empty response) from 404 (not found)
+        if resp.status_code == 200:
+            data = resp.json()
+            job_count = _count_jobs(data, ats)
+            return job_count  # Found (0 or more jobs)
+
+        # 404 or other error = not found
+        return None
+    except requests.Timeout:
+        return None
+    except Exception:
+        return None
 
 
 def discover_company_batch(job_list: list, batch_delay: float = 0.1) -> int:
