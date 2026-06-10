@@ -122,8 +122,10 @@ def fetch_all_jobs(profile, config):
         from app.services.job_api_fetcher import fetch_serpapi_jobs
         layers.append(("SerpApi", fetch_serpapi_jobs, {"profile": profile, "api_key": serpapi_key, "delay": scrape_delay}))
 
-    # ── Layer 6: Career Pages ──
-    layers.append(("Career Pages", _fetch_from_career_pages, {"profile": profile}))
+    # ❌ DISABLED 2026-06-08: Has returned 0 jobs in every log analyzed.
+    # Career Pages layer was a search-URL generator but never produced fetchable jobs.
+    #
+    # layers.append(("Career Pages", _fetch_from_career_pages, {"profile": profile}))
 
     # ── Layer 7: SearxNG (RE-ENABLED - uses self-hosted instance from SEARXNG_URL) ──
     searxng_url = config.get("SEARXNG_URL", "")
@@ -181,29 +183,41 @@ def fetch_all_jobs(profile, config):
     linkedin_queries = [q["query"] if isinstance(q, dict) else q for q in queries]
     layers.append(("LinkedIn Guest", fetch_linkedin_guest_jobs, {"profile": profile, "queries": linkedin_queries, "location": "Pune", "max_pages": 2}))
 
-    # ── Layer 19: Naukri JSON API ──
-    from app.services.naukri_fetcher import fetch_naukri_jobs
-    naukri_queries = [q["query"] if isinstance(q, dict) else q for q in queries]
-    # Fetch for multiple locations
-    for naukri_loc in ["pune", "delhi", "bangalore", "mumbai"]:
-        layers.append((f"Naukri ({naukri_loc.title()})", fetch_naukri_jobs, {"profile": profile, "queries": naukri_queries, "location": naukri_loc, "max_pages": 1}))
+    # ❌ DISABLED 2026-06-08: Naukri direct API blocks our requests (HTTP 406).
+    # Circuit breaker has been perma-open for 4 sessions. Header variations tried: none work.
+    # Naukri likely requires browser session cookies or JS challenge.
+    # Note: We still get ~45 Naukri jobs per refresh via Jooble/Yahoo/SearxNG aggregation.
+    # To re-enable: Build Playwright-based scraper with real browser session (4-6 hours, separate project).
+    #
+    # from app.services.naukri_fetcher import fetch_naukri_jobs
+    # naukri_queries = [q["query"] if isinstance(q, dict) else q for q in queries]
+    # for naukri_loc in ["pune", "delhi", "bangalore", "mumbai"]:
+    #     layers.append((f"Naukri ({naukri_loc.title()})", fetch_naukri_jobs, {"profile": profile, "queries": naukri_queries, "location": naukri_loc, "max_pages": 1}))
 
-    # ── Layer 20: Indian Unicorn Fetcher (Tier 3a) ──
-    from app.services.indian_unicorn_fetcher import fetch_indian_unicorns
-    layers.append(("Indian Unicorns", fetch_indian_unicorns, {"profile": profile, "max_companies": 20}))
+    # ❌ DISABLED 2026-06-08: 117s for 0 jobs across multiple sessions.
+    # Queries with exact-match quotes (e.g., "engineer") rarely match SearxNG index.
+    # site:domain.com doesn't deep-index careers subpages. Sequential calls (100 SearxNG calls back-to-back).
+    # To re-enable: Drop quotes from queries, use site:domain.com/jobs scoping, parallelize with ThreadPoolExecutor, cap to 5 companies.
+    #
+    # from app.services.indian_unicorn_fetcher import fetch_indian_unicorns
+    # layers.append(("Indian Unicorns", fetch_indian_unicorns, {"profile": profile, "max_companies": 20}))
 
-    # ── Layers 21-25: Direct Career Page Scrapers (Tier 3b) ──
-    from app.services.scrapers.razorpay_scraper import fetch_razorpay
-    from app.services.scrapers.swiggy_scraper import fetch_swiggy
-    from app.services.scrapers.cred_scraper import fetch_cred
-    from app.services.scrapers.phonepe_scraper import fetch_phonepe
-    from app.services.scrapers.zomato_scraper import fetch_zomato
-
-    layers.append(("Razorpay Direct", fetch_razorpay, {"profile": profile}))
-    layers.append(("Swiggy Direct", fetch_swiggy, {"profile": profile}))
-    layers.append(("CRED Direct", fetch_cred, {"profile": profile}))
-    layers.append(("PhonePe Direct", fetch_phonepe, {"profile": profile}))
-    layers.append(("Zomato Direct", fetch_zomato, {"profile": profile}))
+    # ❌ DISABLED 2026-06-08: All 5 scrapers shipped with placeholder CSS selectors.
+    # Razorpay/Swiggy/PhonePe/Zomato: returned 0 jobs, results cached as empty for 6h.
+    # CRED: URL outdated (cred.club/careers → 404, real URL is careers.cred.club).
+    # To re-enable: Visit careers page, get real selectors via DevTools, update parse_jobs(), test locally, then uncomment.
+    #
+    # from app.services.scrapers.razorpay_scraper import fetch_razorpay
+    # from app.services.scrapers.swiggy_scraper import fetch_swiggy
+    # from app.services.scrapers.cred_scraper import fetch_cred
+    # from app.services.scrapers.phonepe_scraper import fetch_phonepe
+    # from app.services.scrapers.zomato_scraper import fetch_zomato
+    #
+    # layers.append(("Razorpay Direct", fetch_razorpay, {"profile": profile}))
+    # layers.append(("Swiggy Direct", fetch_swiggy, {"profile": profile}))
+    # layers.append(("CRED Direct", fetch_cred, {"profile": profile}))
+    # layers.append(("PhonePe Direct", fetch_phonepe, {"profile": profile}))
+    # layers.append(("Zomato Direct", fetch_zomato, {"profile": profile}))
 
     # ── Layer 26: Brave Search (optional, requires API key) ──
     brave_key = config.get("BRAVE_SEARCH_API_KEY", "")

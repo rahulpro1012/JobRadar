@@ -14,6 +14,11 @@ from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
+# Import hardcoded company lists from other ATS fetchers
+# (used in UNION pattern with DB discoveries)
+from app.services.workable_fetcher import WORKABLE_COMPANIES
+from app.services.smartrecruiters_fetcher import SMARTRECRUITERS_COMPANIES
+
 
 # ============================================================
 # Company → ATS Mapping
@@ -92,48 +97,59 @@ ASHBY_COMPANIES = {
 
 
 # ============================================================
-# Dynamic Company Loading from Database
+# Dynamic Company Loading from Database (UNION Pattern)
 # ============================================================
 
-def _load_companies_from_db(ats_name: str) -> dict:
+def _load_companies_for_ats(ats_name: str) -> dict:
     """
-    Load companies for a specific ATS from the company_registry database table.
-    Falls back to hardcoded company lists if database is empty or unavailable.
+    Load companies for an ATS as UNION of:
+      1. Hardcoded baseline (always present, known-good, source of truth)
+      2. DB-discovered companies from company_registry (probe results, auto-discovery)
+
+    This guarantees we never regress from removing known-working companies,
+    while still letting the registry grow organically.
 
     Args:
-        ats_name: One of "greenhouse", "lever", "ashby", "workable", "smartrecruiters", "recruitee"
+        ats_name: One of "greenhouse", "lever", "ashby", "workable", "smartrecruiters"
 
     Returns:
-        Dict of {company_name: slug, ...} or fallback hardcoded dict
+        Dict of {company_name: slug, ...} combining hardcoded + DB discoveries
     """
-    try:
-        from app.database import get_connection
-
-        with get_connection() as conn:
-            rows = conn.execute(
-                "SELECT name, slug FROM company_registry WHERE ats = ? ORDER BY job_count DESC",
-                (ats_name,)
-            ).fetchall()
-
-            if rows:
-                # Build company dict from database
-                companies = {row["name"]: row["slug"] for row in rows}
-                logger.debug(f"Loaded {len(companies)} companies for {ats_name} from database")
-                return companies
-    except Exception as e:
-        logger.debug(f"Failed to load {ats_name} companies from database: {e}")
-
-    # Fallback to hardcoded lists
-    fallback_map = {
+    # Hardcoded baseline from each fetcher file
+    HARDCODED_COMPANIES = {
         "greenhouse": GREENHOUSE_COMPANIES,
         "lever": LEVER_COMPANIES,
         "ashby": ASHBY_COMPANIES,
+        "workable": WORKABLE_COMPANIES,
+        "smartrecruiters": SMARTRECRUITERS_COMPANIES,
     }
 
-    fallback = fallback_map.get(ats_name, {})
-    if fallback:
-        logger.debug(f"Using hardcoded fallback: {len(fallback)} companies for {ats_name}")
-    return fallback
+    hardcoded = HARDCODED_COMPANIES.get(ats_name, {})
+    if not hardcoded:
+        return {}
+
+    # Load DB discoveries (only companies with job_count > 0)
+    db_companies = {}
+    try:
+        from app.database import get_connection
+        with get_connection() as conn:
+            rows = conn.execute(
+                "SELECT name, slug FROM company_registry WHERE ats = ? AND job_count > 0",
+                (ats_name,)
+            ).fetchall()
+            if rows:
+                db_companies = {row["name"]: row["slug"] for row in rows}
+    except Exception as e:
+        logger.debug(f"[ats_fetcher] DB lookup failed for {ats_name}: {e}")
+
+    # UNION: hardcoded takes precedence, DB adds new discoveries
+    combined = {**db_companies, **hardcoded}  # hardcoded overwrites DB if slug collision
+
+    logger.debug(
+        f"[ats_fetcher] {ats_name}: {len(hardcoded)} hardcoded + "
+        f"{len(db_companies)} from DB = {len(combined)} total companies"
+    )
+    return combined
 
 
 # ============================================================
@@ -383,8 +399,8 @@ def fetch_greenhouse_jobs(profile, delay=0.2):
     kept = 0
     filtered = 0
 
-    # Load companies from database (with fallback to hardcoded list)
-    companies = _load_companies_from_db("greenhouse")
+    # Load companies (UNION of hardcoded + DB discoveries)
+    companies = _load_companies_for_ats("greenhouse")
 
     for company_name, board_token in companies.items():
         try:
@@ -454,8 +470,8 @@ def fetch_lever_jobs(profile, delay=0.5):
     kept = 0
     filtered = 0
 
-    # Load companies from database (with fallback to hardcoded list)
-    companies = _load_companies_from_db("lever")
+    # Load companies (UNION of hardcoded + DB discoveries)
+    companies = _load_companies_for_ats("lever")
 
     for company_name, slug in companies.items():
         try:
@@ -528,8 +544,8 @@ def fetch_ashby_jobs(profile, delay=0.5):
     kept = 0
     filtered = 0
 
-    # Load companies from database (with fallback to hardcoded list)
-    companies = _load_companies_from_db("ashby")
+    # Load companies (UNION of hardcoded + DB discoveries)
+    companies = _load_companies_for_ats("ashby")
 
     for company_name, slug in companies.items():
         try:
