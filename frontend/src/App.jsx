@@ -16,6 +16,7 @@ import * as api from './services/api';
 import ScrollToTop from "./components/ScrollToTop";
 import LastRefreshed from "./components/LastRefreshed";
 import ProfileEditor from "./components/ProfileEditor";
+import BulkActionBar from "./components/BulkActionBar";
 
 export default function App() {
   const [connected, setConnected] = useState(false);
@@ -43,15 +44,20 @@ export default function App() {
     }
   });
   const [profileEditorOpen, setProfileEditorOpen] = useState(false);
+  const [refreshProgress, setRefreshProgress] = useState(null);
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [showDismissed, setShowDismissed] = useState(false);
 
   const fileRef = useRef(null);
+  const pollRef = useRef(null);
 
   useEffect(() => {
     wakeUpBackend();
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, []);
   useEffect(() => {
     if (connected) loadJobs();
-  }, [activeTab, filters, connected, currentPage]);
+  }, [activeTab, filters, connected, currentPage, showDismissed]);
 
   // Client-side search filter
   const filteredJobs = useMemo(() => {
@@ -95,6 +101,15 @@ export default function App() {
         setProfile(null);
       }
       await Promise.all([loadJobs(), loadStats(), loadBlacklistCount()]);
+
+      // Reconnect to an in-flight refresh (e.g. page reloaded mid-run)
+      try {
+        const latest = await api.getLatestRefresh();
+        const st = latest.data?.status;
+        if (st === "running" || st === "pending" || st === "ai_scoring") {
+          startPolling(latest.data.job_id);
+        }
+      } catch {}
     } finally {
       setLoading(false);
     }
@@ -107,6 +122,7 @@ export default function App() {
       if (filters.minScore > 0) params.min_score = filters.minScore;
       if (filters.days > 0) params.days = filters.days;
       if (filters.sources?.length > 0) params.source = filters.sources[0];
+      if (showDismissed) params.include_dismissed = true;
       const res = await api.getJobs(params);
       setJobs(res.data.jobs);
       setPagination(res.data.pagination);
@@ -140,34 +156,66 @@ export default function App() {
     }
   };
 
+  // Poll an async refresh job until it completes/fails, driving the loader.
+  const startPolling = (jobId) => {
+    if (pollRef.current) clearInterval(pollRef.current);
+    setRefreshing(true);
+
+    const finish = async (data) => {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+      setRefreshing(false);
+      setRefreshProgress(null);
+
+      if (data?.status === "failed") {
+        toast.error(data.error_message || "Refresh failed");
+      } else {
+        await new Promise((r) => setTimeout(r, 400)); // let commits settle
+        await Promise.all([loadJobs(), loadStats()]);
+        const now = Date.now();
+        setLastRefreshedAt(now);
+        try {
+          window.localStorage.setItem("jobradar-last-refresh", String(now));
+        } catch {}
+        const parts = [];
+        if (data?.jobs_new > 0) parts.push(`${data.jobs_new} new`);
+        if (data?.jobs_ai_scored > 0) parts.push(`${data.jobs_ai_scored} AI-scored`);
+        if (data?.duration_sec) parts.push(`${data.duration_sec}s`);
+        toast.success(parts.length > 0 ? parts.join(" · ") : "Refresh complete");
+      }
+    };
+
+    const tick = async () => {
+      try {
+        const res = await api.getRefreshStatus(jobId);
+        const d = res.data;
+        setRefreshProgress(d);
+        if (d.status === "completed" || d.status === "failed") {
+          await finish(d);
+        }
+      } catch (err) {
+        // 404 (job gone) or transient error — stop gracefully
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+        setRefreshing(false);
+        setRefreshProgress(null);
+      }
+    };
+
+    tick();
+    pollRef.current = setInterval(tick, 2000);
+  };
+
   const handleRefresh = async () => {
+    if (refreshing) return;
+    setRefreshProgress(null);
     setRefreshing(true);
     try {
-      const res = await api.refreshJobs();
-      const d = res.data;
-
-      // Small delay to ensure backend has committed all data
-      await new Promise((r) => setTimeout(r, 500));
-
-      await Promise.all([loadJobs(), loadStats()]);
-
-      const now = Date.now();
-      setLastRefreshedAt(now);
-      try {
-        window.localStorage.setItem("jobradar-last-refresh", String(now));
-      } catch {}
-
-      const parts = [];
-      if (d.new_jobs > 0) parts.push(`${d.new_jobs} new`);
-      if (d.filtered > 0) parts.push(`${d.filtered} filtered`);
-      if (d.deduplicated > 0) parts.push(`${d.deduplicated} deduped`);
-      if (d.scored > 0) parts.push(`${d.scored} scored`);
-      if (d.ai_scored > 0) parts.push(`${d.ai_scored} AI-scored`);
-      toast.success(parts.length > 0 ? parts.join(" · ") : "No new jobs found");
+      const res = await api.refreshJobsAsync();
+      startPolling(res.data.job_id);
     } catch (err) {
-      toast.error(err.response?.data?.error || "Refresh failed");
-    } finally {
       setRefreshing(false);
+      toast.error(err.response?.data?.error || "Refresh failed to start");
     }
   };
 
@@ -198,6 +246,86 @@ export default function App() {
       loadJobs();
       toast.info(`Blocked: ${company}`);
     } catch {}
+  };
+
+  // ── Dismiss feature ──
+  const handleDismiss = async (job) => {
+    const jobId = job.id;
+    // Optimistic: remove from the visible list
+    setJobs((prev) => prev.filter((j) => j.id !== jobId));
+    try {
+      await api.dismissJob(jobId);
+      loadStats();
+      toast(
+        `Dismissed "${(job.title || "job").slice(0, 40)}"`,
+        "info",
+        5000,
+        {
+          label: "Undo",
+          onClick: async () => {
+            try {
+              await api.undismissJob(jobId);
+              await Promise.all([loadJobs(), loadStats()]);
+            } catch {
+              toast.error("Couldn't undo");
+            }
+          },
+        }
+      );
+    } catch {
+      // Roll back optimistic removal
+      await loadJobs();
+      toast.error("Failed to dismiss — please try again");
+    }
+  };
+
+  const handleUndismiss = async (jobId) => {
+    try {
+      await api.undismissJob(jobId);
+      await Promise.all([loadJobs(), loadStats()]);
+    } catch {
+      toast.error("Failed to restore");
+    }
+  };
+
+  const toggleSelected = (jobId) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(jobId)) next.delete(jobId);
+      else next.add(jobId);
+      return next;
+    });
+  };
+  const clearSelection = () => setSelectedIds(new Set());
+
+  const handleBulkDismiss = async () => {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    setJobs((prev) => prev.filter((j) => !selectedIds.has(j.id)));
+    clearSelection();
+    try {
+      const res = await api.bulkDismissJobs(ids);
+      loadStats();
+      toast(
+        `Dismissed ${res.data.dismissed_count} jobs`,
+        "info",
+        5000,
+        {
+          label: "Undo",
+          onClick: async () => {
+            try {
+              await api.bulkUndismissJobs(ids);
+              await Promise.all([loadJobs(), loadStats()]);
+            } catch {
+              toast.error("Couldn't undo");
+            }
+          },
+        }
+      );
+    } catch {
+      await loadJobs();
+      toast.error("Bulk dismiss failed — please try again");
+    }
   };
 
   const handlePageChange = (page) => {
@@ -255,6 +383,9 @@ export default function App() {
                   setSettingsTab("blacklist");
                   setSettingsOpen(true);
                 }}
+                showDismissed={showDismissed}
+                onToggleDismissed={() => { setShowDismissed((v) => !v); setCurrentPage(1); }}
+                dismissedCount={stats?.dismissed || 0}
               />
             )}
           </div>
@@ -267,6 +398,9 @@ export default function App() {
                 setSettingsTab("blacklist");
                 setSettingsOpen(true);
               }}
+              showDismissed={showDismissed}
+              onToggleDismissed={() => { setShowDismissed((v) => !v); setCurrentPage(1); }}
+              dismissedCount={stats?.dismissed || 0}
             />
           </div>
 
@@ -287,7 +421,7 @@ export default function App() {
                 />
 
                 {refreshing ? (
-                  <RefreshLoader profile={profile} />
+                  <RefreshLoader profile={profile} progress={refreshProgress} />
                 ) : (
                   <>
                     <TabBar
@@ -316,6 +450,13 @@ export default function App() {
                       </div>
                     )}
 
+                    {/* Bulk action bar (appears when jobs are selected) */}
+                    <BulkActionBar
+                      selectedCount={selectedIds.size}
+                      onDismissAll={handleBulkDismiss}
+                      onClear={clearSelection}
+                    />
+
                     <div className="space-y-3">
                       {loading ? (
                         <JobCardSkeleton count={4} />
@@ -342,6 +483,10 @@ export default function App() {
                             onStatusChange={handleStatusChange}
                             onBlockSource={handleBlockSource}
                             onBlockCompany={handleBlockCompany}
+                            onDismiss={handleDismiss}
+                            onUndismiss={handleUndismiss}
+                            selected={selectedIds.has(job.id)}
+                            onToggleSelect={toggleSelected}
                           />
                         ))
                       )}

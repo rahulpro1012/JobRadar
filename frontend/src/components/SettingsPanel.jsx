@@ -10,12 +10,14 @@ import {
   ToggleLeft,
   ToggleRight,
   RotateCcw,
+  Activity,
 } from "lucide-react";
 import * as api from "../services/api";
-import { quotaPercent } from "../utils/helpers";
+import { quotaPercent, sourceHealthColor } from "../utils/helpers";
 
 const SETTING_TABS = [
   { key: "quota", label: "API Quota", icon: BarChart3 },
+  { key: "sources", label: "Sources", icon: Activity },
   { key: "companies", label: "Companies", icon: Building2 },
   { key: "blacklist", label: "Blacklist", icon: Ban },
   { key: "preferences", label: "Preferences", icon: SlidersHorizontal },
@@ -24,6 +26,7 @@ const SETTING_TABS = [
 export default function SettingsPanel({ isOpen, onClose, initialTab }) {
   const [tab, setTab] = useState(initialTab || "quota");
   const [quota, setQuota] = useState(null);
+  const [sourceHealth, setSourceHealth] = useState([]);
   const [companies, setCompanies] = useState([]);
   const [blacklist, setBlacklist] = useState({ entries: [], grouped: {} });
   const [newCompany, setNewCompany] = useState({
@@ -41,6 +44,9 @@ export default function SettingsPanel({ isOpen, onClose, initialTab }) {
       if (tab === "quota") {
         const r = await api.getQuota();
         setQuota(r.data.quotas);
+      } else if (tab === "sources") {
+        const r = await api.getSourceHealth();
+        setSourceHealth(r.data.sources || []);
       } else if (tab === "companies") {
         const r = await api.getCompanies();
         setCompanies(r.data.companies);
@@ -149,6 +155,53 @@ export default function SettingsPanel({ isOpen, onClose, initialTab }) {
                         }}
                       />
                     </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Source health */}
+          {tab === "sources" && (
+            <div className="space-y-2">
+              {sourceHealth.length === 0 && (
+                <p className="text-sm t-muted">No source health data yet. Run a refresh first.</p>
+              )}
+              {sourceHealth.map((s) => {
+                const status = s.status || "healthy";
+                return (
+                  <div
+                    key={s.source}
+                    className="flex items-center gap-3 py-2 px-3 rounded-lg border border-themed"
+                    style={{ backgroundColor: "var(--bg-elevated)" }}
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium t-secondary truncate">{s.source}</span>
+                        <span className={`badge text-xs ${sourceHealthColor(status)}`}>
+                          {status.replace("_", " ")}
+                        </span>
+                      </div>
+                      <p className="text-xs t-faint truncate">
+                        {s.jobs_returned_last_run ?? 0} jobs last run
+                        {s.consecutive_failures > 0 && ` · ${s.consecutive_failures} fails in a row`}
+                        {s.last_failure_reason && ` · ${s.last_failure_reason}`}
+                      </p>
+                    </div>
+                    {status !== "healthy" && (
+                      <button
+                        onClick={async () => {
+                          try {
+                            await api.resetSourceHealth(s.source);
+                            loadData();
+                          } catch {}
+                        }}
+                        className="btn-ghost text-xs shrink-0"
+                        title="Reset circuit breaker"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" /> Reset
+                      </button>
+                    )}
                   </div>
                 );
               })}

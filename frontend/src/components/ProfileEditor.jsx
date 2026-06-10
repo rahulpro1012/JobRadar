@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
-import { X, Save, Cpu, FileText, ChevronDown, ChevronUp, MapPin } from 'lucide-react';
+import { X, Save, Cpu, FileText, ChevronDown, ChevronUp, MapPin, Sparkles, Loader2, Ban } from 'lucide-react';
 import TagInput from './TagInput';
-import { updateProfile } from '../services/api';
+import { updateProfile, reparseProfile } from '../services/api';
 import { toast } from './Toast';
 
 const EXPERIENCE_LEVELS = ['Junior', 'Junior-Mid', 'Mid', 'Senior', 'Lead/Principal'];
@@ -9,6 +9,7 @@ const EXPERIENCE_LEVELS = ['Junior', 'Junior-Mid', 'Mid', 'Senior', 'Lead/Princi
 export default function ProfileEditor({ isOpen, onClose, profile, onProfileUpdate }) {
   const [form, setForm] = useState({});
   const [saving, setSaving] = useState(false);
+  const [reparsing, setReparsing] = useState(false);
   const [showRawText, setShowRawText] = useState(false);
 
   useEffect(() => {
@@ -44,9 +45,33 @@ export default function ProfileEditor({ isOpen, onClose, profile, onProfileUpdat
     }
   };
 
+  const handleReparse = async () => {
+    setReparsing(true);
+    try {
+      const res = await reparseProfile();
+      onProfileUpdate(res.data.profile);
+      toast.success('Resume re-analyzed with tiered AI parsing (v2)');
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Re-analysis failed');
+    } finally {
+      setReparsing(false);
+    }
+  };
+
   if (!isOpen || !profile) return null;
 
   const parseMethod = profile.resume_text ? 'Parsed from resume' : 'Manual';
+
+  // A1: v2 tiered data (read-only display)
+  const isV2 = (profile.schema_version || 1) >= 2;
+  const tiered = profile.skills_tiered && typeof profile.skills_tiered === 'object' ? profile.skills_tiered : null;
+  const prefs = profile.preferences_explicit && typeof profile.preferences_explicit === 'object'
+    ? profile.preferences_explicit : {};
+  const dealBreakers = Array.isArray(profile.deal_breakers) ? profile.deal_breakers : [];
+  const skillRow = (s) => {
+    if (typeof s === 'string') return { name: s, years: null, evidence: '' };
+    return { name: s?.name || '', years: s?.years ?? null, evidence: s?.evidence || '' };
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center p-4 pt-8 sm:pt-16 overflow-y-auto">
@@ -62,13 +87,94 @@ export default function ProfileEditor({ isOpen, onClose, profile, onProfileUpdat
             <div className="flex items-center gap-2 mt-0.5">
               <Cpu className="w-3.5 h-3.5 text-violet-500" />
               <span className="text-xs text-violet-600 dark:text-violet-400 font-medium">{parseMethod}</span>
+              {isV2 && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium
+                                 bg-violet-500/10 text-violet-600 dark:text-violet-400 border border-violet-500/20">
+                  <Sparkles className="w-3 h-3" /> AI-tiered (v2)
+                </span>
+              )}
             </div>
           </div>
-          <button onClick={onClose} className="btn-ghost p-1.5"><X className="w-5 h-5" /></button>
+          <div className="flex items-center gap-2">
+            {profile.resume_text && (
+              <button
+                onClick={handleReparse}
+                disabled={reparsing}
+                className="btn-secondary text-xs"
+                title="Re-parse your resume into tiered skills + preferences"
+              >
+                {reparsing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+                {reparsing ? 'Analyzing…' : 'Re-analyze with AI'}
+              </button>
+            )}
+            <button onClick={onClose} className="btn-ghost p-1.5"><X className="w-5 h-5" /></button>
+          </div>
         </div>
 
         {/* Content */}
         <div className="px-6 py-5 space-y-6 max-h-[70vh] overflow-y-auto">
+
+          {/* A1: Tiered AI analysis (read-only) */}
+          {isV2 && tiered && (
+            <section className="rounded-xl border border-violet-500/20 bg-violet-500/5 p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-violet-500" />
+                <h3 className="text-sm font-semibold t-secondary">AI Tiered Analysis</h3>
+                <span className="text-xs t-faint">read-only · regenerate with “Re-analyze”</span>
+              </div>
+
+              {['primary', 'familiar', 'learning'].map((tier) => {
+                const items = Array.isArray(tiered[tier]) ? tiered[tier] : [];
+                if (items.length === 0) return null;
+                return (
+                  <div key={tier}>
+                    <p className="text-xs font-semibold t-faint uppercase tracking-wide mb-1.5">{tier}</p>
+                    <div className="space-y-1">
+                      {items.map((s) => {
+                        const row = skillRow(s);
+                        return (
+                          <div key={row.name} className="flex items-baseline gap-2 text-xs">
+                            <span className="font-medium t-secondary">
+                              {row.name}{row.years ? ` · ${row.years}y` : ''}
+                            </span>
+                            {row.evidence && <span className="t-faint truncate">— {row.evidence}</span>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+
+              {dealBreakers.length > 0 && (
+                <div>
+                  <p className="text-xs font-semibold t-faint uppercase tracking-wide mb-1.5">Deal-breakers</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {dealBreakers.map((d) => (
+                      <span key={d} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs
+                                               bg-red-500/10 text-red-500 border border-red-500/20">
+                        <Ban className="w-3 h-3" />{d}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {(Array.isArray(prefs.preferred_locations) && prefs.preferred_locations.length > 0) && (
+                <div>
+                  <p className="text-xs font-semibold t-faint uppercase tracking-wide mb-1.5">Preferred locations</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {prefs.preferred_locations.map((l) => (
+                      <span key={l} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs
+                                               bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                        <MapPin className="w-3 h-3" />{l}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </section>
+          )}
 
           {/* Basic Info */}
           <section>

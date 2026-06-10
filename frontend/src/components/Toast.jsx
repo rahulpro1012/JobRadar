@@ -4,9 +4,12 @@ import { CheckCircle2, AlertCircle, X, Info } from 'lucide-react';
 let toastListener = null;
 let toastId = 0;
 
-export function toast(message, type = 'info', duration = 4000) {
+// action (optional): { label, onClick } — renders an inline action button
+// (e.g. "Undo"). When an action is present the default duration extends to 5s.
+export function toast(message, type = 'info', duration, action = null) {
   if (toastListener) {
-    toastListener({ id: ++toastId, message, type, duration });
+    const dur = duration ?? (action ? 5000 : 4000);
+    toastListener({ id: ++toastId, message, type, duration: dur, action });
   }
 }
 
@@ -51,6 +54,17 @@ export default function ToastContainer() {
           >
             <Icon className="w-5 h-5 shrink-0" />
             <p className="text-sm font-medium flex-1">{t.message}</p>
+            {t.action && (
+              <button
+                onClick={() => {
+                  t.action.onClick?.();
+                  setToasts((prev) => prev.filter((x) => x.id !== t.id));
+                }}
+                className="shrink-0 text-xs font-semibold uppercase tracking-wide px-2 py-1 rounded-md hover:bg-white/10 transition-colors"
+              >
+                {t.action.label}
+              </button>
+            )}
             <button
               onClick={() => setToasts((prev) => prev.filter((x) => x.id !== t.id))}
               className="shrink-0 opacity-60 hover:opacity-100"

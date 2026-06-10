@@ -34,6 +34,9 @@ export const uploadResume = (file) => {
 
 export const updateProfile = (data) => api.put('/profile', data);
 
+// A1: Re-parse the stored resume into the v2 tiered schema
+export const reparseProfile = () => api.post('/profile/reparse');
+
 // ============================================================
 // Jobs
 // ============================================================
@@ -42,12 +45,25 @@ export const getJobs = (params = {}) => api.get('/jobs', { params });
 
 export const getJob = (id) => api.get(`/jobs/${id}`);
 
+export const getJobAnalysis = (id) => api.get(`/jobs/${id}/analysis`);
+
 export const updateJobStatus = (id, status) =>
   api.patch(`/jobs/${id}/status`, { status });
 
 export const getJobStats = () => api.get('/jobs/stats');
 
 export const refreshJobs = () => api.post('/jobs/refresh');
+
+// Async refresh + polling (real per-source progress)
+export const refreshJobsAsync = () => api.post('/jobs/refresh-async');
+export const getRefreshStatus = (jobId) => api.get(`/jobs/refresh-async/${jobId}`);
+export const getLatestRefresh = () => api.get('/jobs/refresh-async/latest');
+
+// Dismiss feature
+export const dismissJob = (id) => api.post(`/jobs/${id}/dismiss`);
+export const undismissJob = (id) => api.post(`/jobs/${id}/undismiss`);
+export const bulkDismissJobs = (jobIds) => api.post('/jobs/bulk-dismiss', { job_ids: jobIds });
+export const bulkUndismissJobs = (jobIds) => api.post('/jobs/bulk-undismiss', { job_ids: jobIds });
 
 // ============================================================
 // Blacklist
@@ -83,5 +99,14 @@ export const toggleCompany = (id) =>
 export const getPreferences = () => api.get('/preferences');
 
 export const resetPreferences = () => api.post('/preferences/reset');
+
+// ============================================================
+// Admin — source health
+// ============================================================
+
+export const getSourceHealth = () => api.get('/admin/source-health');
+
+export const resetSourceHealth = (source) =>
+  api.post(`/admin/source-health/${source}/reset`);
 
 export default api;

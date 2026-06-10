@@ -54,12 +54,16 @@ function buildStages(profile) {
   ];
 }
 
-export default function RefreshLoader({ profile }) {
+export default function RefreshLoader({ profile, progress = null }) {
   const stages = useMemo(() => buildStages(profile), [profile]);
   const waitStart = stages.length - 5;
   const [stageIndex, setStageIndex] = useState(0);
   const [dots, setDots] = useState('');
   const [elapsedSec, setElapsedSec] = useState(0);
+
+  // Real progress arrives once the async poll returns source counts.
+  const hasReal = !!progress && (progress.sources_total > 0 || progress.status === 'ai_scoring');
+  const isScoring = progress?.status === 'ai_scoring';
 
   useEffect(() => {
     const stageTimer = setInterval(() => {
@@ -73,11 +77,35 @@ export default function RefreshLoader({ profile }) {
     return () => { clearInterval(stageTimer); clearInterval(dotTimer); clearInterval(elapsed); };
   }, [waitStart]);
 
-  const stage = stages[stageIndex];
-  const progress = Math.min(95, ((stageIndex + 1) / waitStart) * 100);
-  const minutes = Math.floor(elapsedSec / 60);
-  const seconds = elapsedSec % 60;
+  // Prefer the server's elapsed clock once available
+  const elapsed = progress?.elapsed_sec ?? elapsedSec;
+  const minutes = Math.floor(elapsed / 60);
+  const seconds = elapsed % 60;
   const timeStr = minutes > 0 ? `${minutes}m ${seconds.toString().padStart(2, '0')}s` : `${seconds}s`;
+
+  // Bar + phase: real progress when we have it, else scripted fallback
+  let pct, phaseLabel, lineText;
+  if (hasReal) {
+    if (isScoring) {
+      pct = 96;
+      phaseLabel = 'AI';
+      lineText = 'AI analyzing top matches…';
+    } else {
+      const done = progress.sources_done || 0;
+      const totalSrc = progress.sources_total || 1;
+      pct = Math.min(95, Math.round((done / totalSrc) * 100));
+      phaseLabel = `${done}/${totalSrc}`;
+      lineText = `Scanned ${done} of ${totalSrc} sources · ${progress.jobs_fetched || 0} jobs found`;
+    }
+  } else {
+    const stage = stages[stageIndex];
+    pct = Math.min(95, ((stageIndex + 1) / waitStart) * 100);
+    phaseLabel = stage.phase;
+    lineText = stage.text;
+  }
+
+  const perSource = progress?.per_source && typeof progress.per_source === 'object'
+    ? Object.entries(progress.per_source) : [];
 
   return (
     <div className="flex flex-col items-center justify-center py-16 animate-fade-in">
@@ -93,18 +121,29 @@ export default function RefreshLoader({ profile }) {
       </div>
       <h3 className="font-display font-semibold text-lg t-primary mb-3">Finding your next role{dots}</h3>
       <div className="flex items-center gap-3 mb-5 min-h-[28px]">
-        <span className="badge bg-brand-500/15 text-brand-500 border border-brand-500/25 text-xs min-w-[70px] justify-center">{stage.phase}</span>
-        <p className="text-sm t-muted animate-fade-in" key={stageIndex}>{stage.text}</p>
+        <span className="badge bg-brand-500/15 text-brand-500 border border-brand-500/25 text-xs min-w-[70px] justify-center">{phaseLabel}</span>
+        <p className="text-sm t-muted animate-fade-in" key={lineText}>{lineText}</p>
       </div>
       <div className="w-72 h-1.5 bg-themed-elevated rounded-full overflow-hidden mb-3">
         <div className="h-full bg-gradient-to-r from-brand-600 via-brand-400 to-brand-500 rounded-full transition-all duration-1000 ease-out"
-          style={{ width: `${progress}%` }} />
+          style={{ width: `${pct}%` }} />
       </div>
-      <div className="flex items-center gap-4 text-xs t-faint">
-        <span>Scanning multiple sources</span>
+      <div className="flex items-center gap-4 text-xs t-faint mb-4">
+        <span>{hasReal ? `${progress.jobs_fetched || 0} jobs found` : 'Scanning multiple sources'}</span>
         <span className="w-1 h-1 rounded-full bg-themed-elevated" />
         <span>{timeStr} elapsed</span>
       </div>
+
+      {/* Real per-source tally */}
+      {perSource.length > 0 && (
+        <div className="flex flex-wrap justify-center gap-1.5 max-w-md">
+          {perSource.map(([src, count]) => (
+            <span key={src} className="badge bg-themed-elevated t-muted border border-themed text-xs">
+              {src}: {count}
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

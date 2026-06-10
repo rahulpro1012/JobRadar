@@ -1,4 +1,4 @@
-import { User, MapPin, Briefcase, GraduationCap, Pencil } from 'lucide-react';
+import { User, MapPin, Briefcase, GraduationCap, Pencil, Sparkles, Ban } from 'lucide-react';
 
 export default function ProfileCard({ profile, onClick }) {
   if (!profile) return null;
@@ -6,6 +6,22 @@ export default function ProfileCard({ profile, onClick }) {
   const core = profile.core_skills || [];
   const secondary = profile.secondary_skills || [];
   const tools = profile.tools || [];
+
+  // A1: tiered profile (schema v2)
+  const tiered = profile.skills_tiered && typeof profile.skills_tiered === 'object' ? profile.skills_tiered : null;
+  const prefs = profile.preferences_explicit && typeof profile.preferences_explicit === 'object'
+    ? profile.preferences_explicit : {};
+  const dealBreakers = Array.isArray(profile.deal_breakers) ? profile.deal_breakers : [];
+  const preferredLocations = Array.isArray(prefs.preferred_locations) ? prefs.preferred_locations : [];
+  const isV2 = (profile.schema_version || 1) >= 2 && tiered &&
+    ((tiered.primary?.length || 0) + (tiered.familiar?.length || 0) + (tiered.learning?.length || 0) > 0);
+
+  const skillName = (s) => (typeof s === 'string' ? s : s?.name || '');
+  const skillLabel = (s) => {
+    if (typeof s === 'string') return s;
+    const yrs = s?.years;
+    return yrs ? `${s.name} · ${yrs}y` : (s?.name || '');
+  };
 
   return (
     <div
@@ -36,6 +52,12 @@ export default function ProfileCard({ profile, onClick }) {
               <span className="text-sm t-muted">{profile.education}</span>
             </div>
           )}
+          {isV2 && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium
+                             bg-violet-500/10 text-violet-600 dark:text-violet-400 border border-violet-500/20">
+              <Sparkles className="w-3 h-3" /> AI-tiered
+            </span>
+          )}
         </div>
         {/* Edit hint */}
         <div className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -45,14 +67,60 @@ export default function ProfileCard({ profile, onClick }) {
           </span>
         </div>
       </div>
-      <div className="flex flex-wrap gap-1.5">
-        {core.slice(0, 8).map((s) => (<span key={s} className="skill-tag">{s}</span>))}
-        {secondary.slice(0, 4).map((s) => (<span key={s} className="skill-tag-secondary">{s}</span>))}
-        {tools.slice(0, 3).map((s) => (<span key={s} className="skill-tag-tool">{s}</span>))}
-        {core.length + secondary.length + tools.length > 15 && (
-          <span className="skill-tag-secondary">+{core.length + secondary.length + tools.length - 15} more</span>
-        )}
-      </div>
+
+      {isV2 ? (
+        <div className="space-y-2">
+          {tiered.primary?.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-xs font-semibold t-faint uppercase tracking-wide mr-1">Primary</span>
+              {tiered.primary.slice(0, 8).map((s) => (
+                <span key={skillName(s)} className="skill-tag">{skillLabel(s)}</span>
+              ))}
+            </div>
+          )}
+          {tiered.familiar?.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-xs font-semibold t-faint uppercase tracking-wide mr-1">Familiar</span>
+              {tiered.familiar.slice(0, 6).map((s) => (
+                <span key={skillName(s)} className="skill-tag-secondary">{skillLabel(s)}</span>
+              ))}
+            </div>
+          )}
+          {tiered.learning?.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-xs font-semibold t-faint uppercase tracking-wide mr-1">Learning</span>
+              {tiered.learning.slice(0, 6).map((s) => (
+                <span key={skillName(s)} className="skill-tag-tool">{skillName(s)}</span>
+              ))}
+            </div>
+          )}
+          {(dealBreakers.length > 0 || preferredLocations.length > 0) && (
+            <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+              {preferredLocations.slice(0, 4).map((l) => (
+                <span key={l} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs
+                                         bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                  <MapPin className="w-3 h-3" />{l}
+                </span>
+              ))}
+              {dealBreakers.slice(0, 4).map((d) => (
+                <span key={d} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs
+                                         bg-red-500/10 text-red-500 border border-red-500/20">
+                  <Ban className="w-3 h-3" />{d}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="flex flex-wrap gap-1.5">
+          {core.slice(0, 8).map((s) => (<span key={s} className="skill-tag">{s}</span>))}
+          {secondary.slice(0, 4).map((s) => (<span key={s} className="skill-tag-secondary">{s}</span>))}
+          {tools.slice(0, 3).map((s) => (<span key={s} className="skill-tag-tool">{s}</span>))}
+          {core.length + secondary.length + tools.length > 15 && (
+            <span className="skill-tag-secondary">+{core.length + secondary.length + tools.length - 15} more</span>
+          )}
+        </div>
+      )}
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import { Filter, Ban, ChevronDown, ChevronUp } from 'lucide-react';
+import { Filter, Ban, ChevronDown, ChevronUp, EyeOff, Eye } from 'lucide-react';
 import { useState } from 'react';
 
 const SOURCES = [
@@ -18,7 +18,10 @@ const DATE_OPTIONS = [
   { value: 0, label: 'All time' },
 ];
 
-export default function Sidebar({ filters, onFilterChange, blacklistCount, onManageBlacklist }) {
+export default function Sidebar({
+  filters, onFilterChange, blacklistCount, onManageBlacklist,
+  showDismissed = false, onToggleDismissed, dismissedCount = 0,
+}) {
   const [showFilters, setShowFilters] = useState(true);
 
   const handleSourceToggle = (sourceKey) => {
@@ -79,6 +82,23 @@ export default function Sidebar({ filters, onFilterChange, blacklistCount, onMan
                 ))}
               </div>
             </div>
+
+            {onToggleDismissed && (
+              <div className="pt-3 border-t border-themed">
+                <button
+                  onClick={onToggleDismissed}
+                  className="flex items-center justify-between w-full text-sm t-muted hover:t-primary"
+                >
+                  <div className="flex items-center gap-2">
+                    {showDismissed ? <Eye className="w-4 h-4 text-brand-500" /> : <EyeOff className="w-4 h-4 t-faint" />}
+                    <span>{showDismissed ? 'Hide dismissed' : 'Show dismissed'}</span>
+                  </div>
+                  {dismissedCount > 0 && (
+                    <span className="badge bg-themed-elevated t-muted border border-themed">{dismissedCount}</span>
+                  )}
+                </button>
+              </div>
+            )}
 
             <div className="pt-3 border-t border-themed">
               <button onClick={onManageBlacklist} className="flex items-center justify-between w-full text-sm t-muted hover:t-primary">

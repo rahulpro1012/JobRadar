@@ -76,3 +76,30 @@ export function quotaPercent(used, limit) {
   if (limit <= 0) return -1;
   return Math.min(100, Math.round((used / limit) * 100));
 }
+
+// C1: humanize red-flag tags from job_ai_analysis
+const RED_FLAG_LABELS = {
+  seniority_mismatch: 'Seniority mismatch',
+  stale_posting: 'Stale posting',
+  underpaid: 'Underpaid',
+  generic_jd: 'Generic JD',
+  experience_too_high: 'Over-qualified',
+  location_mismatch: 'Location mismatch',
+  stack_mismatch: 'Stack mismatch',
+  body_shop: 'Body shop',
+};
+
+export function redFlagLabel(flag) {
+  if (!flag || typeof flag !== 'string') return '';
+  return RED_FLAG_LABELS[flag] || capitalize(flag.replace(/_/g, ' '));
+}
+
+// Source-health status → badge classes
+export function sourceHealthColor(status) {
+  const map = {
+    healthy: 'bg-emerald-500/15 text-emerald-500 border border-emerald-500/25',
+    degraded: 'bg-amber-500/15 text-amber-500 border border-amber-500/25',
+    circuit_open: 'bg-red-500/15 text-red-500 border border-red-500/25',
+  };
+  return map[status] || 'bg-themed-elevated t-muted border border-themed';
+}
