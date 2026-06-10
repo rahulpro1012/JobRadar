@@ -4,6 +4,8 @@ Fetches jobs from Greenhouse, Lever, and Ashby public APIs.
 Filters based on the user's profile: seniority level, tech stack, and skill overlap.
 
 All free, no API key required.
+
+Patch 1: Parallelized company probing within each ATS platform.
 """
 import re
 import json
@@ -11,6 +13,7 @@ import time
 import html
 import logging
 from urllib.parse import urlparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 logger = logging.getLogger(__name__)
 
@@ -450,70 +453,108 @@ class ProfileFilter:
 # ============================================================
 
 def fetch_greenhouse_jobs(profile, delay=0.2):
-    """Fetch and filter jobs from Greenhouse companies."""
+    """
+    Fetch and filter jobs from Greenhouse companies.
+
+    Patch 1: Probes companies IN PARALLEL (max 10 workers) instead of sequentially.
+    """
     import requests
 
     pf = ProfileFilter(profile)
+    companies = _load_companies_for_ats("greenhouse")
+
+    if not companies:
+        return []
+
     all_jobs = []
+    kept_total = 0
+    filtered_total = 0
+
+    # Patch 1: Parallel company probing with ThreadPoolExecutor
+    logger.info(f"Greenhouse: Probing {len(companies)} companies in parallel")
+    with ThreadPoolExecutor(max_workers=10, thread_name_prefix="gh") as executor:
+        futures = {
+            executor.submit(_fetch_one_greenhouse_company, company_name, board_token, pf): company_name
+            for company_name, board_token in companies.items()
+        }
+
+        for future in as_completed(futures):
+            company_name = futures[future]
+            try:
+                jobs, kept, filtered = future.result(timeout=20)
+                all_jobs.extend(jobs)
+                kept_total += kept
+                filtered_total += filtered
+            except Exception as e:
+                logger.warning(f"Greenhouse {company_name} error: {e}")
+
+    logger.info(f"Greenhouse: {kept_total} kept, {filtered_total} filtered out, from {len(companies)} companies (parallel)")
+    return all_jobs
+
+
+def _fetch_one_greenhouse_company(company_name: str, board_token: str, pf) -> tuple:
+    """
+    Fetch jobs from one Greenhouse company and filter them.
+
+    Patch 1: Helper for parallel company probing.
+
+    Returns:
+        Tuple of (jobs_list, kept_count, filtered_count)
+    """
+    import requests
+
+    jobs = []
     kept = 0
     filtered = 0
 
-    # Load companies (UNION of hardcoded + DB discoveries)
-    companies = _load_companies_for_ats("greenhouse")
+    try:
+        url = f"https://boards-api.greenhouse.io/v1/boards/{board_token}/jobs?content=true"
+        resp = requests.get(url, verify=False, timeout=15, headers={
+            "User-Agent": "JobRadar/1.0 (personal job search tool)"
+        })
 
-    for company_name, board_token in companies.items():
-        try:
-            url = f"https://boards-api.greenhouse.io/v1/boards/{board_token}/jobs?content=true"
-            resp = requests.get(url, verify=False, timeout=15, headers={
-                "User-Agent": "JobRadar/1.0 (personal job search tool)"
-            })
+        if resp.status_code != 200:
+            return jobs, kept, filtered
 
-            if resp.status_code != 200:
+        data = resp.json()
+        jobs_list = data.get("jobs", [])
+
+        for job in jobs_list:
+            title = job.get("title", "")
+            content = job.get("content", "")
+            job_location = job.get("location", {}).get("name", "")
+
+            # Clean HTML from content
+            clean_content = html.unescape(content) if content else ""
+            clean_content = re.sub(r"<[^>]+>", " ", clean_content)
+            clean_content = re.sub(r"\s+", " ", clean_content).strip()
+
+            # ── Dynamic filtering ──
+            keep, reason = pf.should_keep(title, clean_content)
+            if not keep:
+                filtered += 1
                 continue
 
-            data = resp.json()
-            jobs_list = data.get("jobs", [])
+            # Find matching skills for display
+            searchable = (title + " " + clean_content).lower()
+            matching_skills = [s for s in pf.core_skills if s.lower() in searchable]
 
-            for job in jobs_list:
-                title = job.get("title", "")
-                content = job.get("content", "")
-                job_location = job.get("location", {}).get("name", "")
+            jobs.append({
+                "title": title[:150],
+                "company": company_name,
+                "location": job_location[:100],
+                "source_url": job.get("absolute_url", ""),
+                "source_domain": "greenhouse.io",
+                "description_snippet": clean_content[:300],
+                "posted_date": job.get("updated_at", "")[:10],
+                "skills_found": json.dumps(matching_skills[:8]),
+            })
+            kept += 1
 
-                # Clean HTML from content
-                clean_content = html.unescape(content) if content else ""
-                clean_content = re.sub(r"<[^>]+>", " ", clean_content)
-                clean_content = re.sub(r"\s+", " ", clean_content).strip()
+    except Exception as e:
+        logger.debug(f"[gh] {company_name}: {e}")
 
-                # ── Dynamic filtering ──
-                keep, reason = pf.should_keep(title, clean_content)
-                if not keep:
-                    filtered += 1
-                    continue
-
-                # Find matching skills for display
-                searchable = (title + " " + clean_content).lower()
-                matching_skills = [s for s in pf.core_skills if s.lower() in searchable]
-
-                all_jobs.append({
-                    "title": title[:150],
-                    "company": company_name,
-                    "location": job_location[:100],
-                    "source_url": job.get("absolute_url", ""),
-                    "source_domain": "greenhouse.io",
-                    "description_snippet": clean_content[:300],
-                    "posted_date": job.get("updated_at", "")[:10],
-                    "skills_found": json.dumps(matching_skills[:8]),
-                })
-                kept += 1
-
-            time.sleep(delay)
-
-        except Exception as e:
-            logger.warning(f"Greenhouse {company_name} error: {e}")
-            continue
-
-    logger.info(f"Greenhouse: {kept} kept, {filtered} filtered out, from {len(companies)} companies")
-    return all_jobs
+    return jobs, kept, filtered
 
 
 # ============================================================
@@ -521,73 +562,111 @@ def fetch_greenhouse_jobs(profile, delay=0.2):
 # ============================================================
 
 def fetch_lever_jobs(profile, delay=0.5):
-    """Fetch and filter jobs from Lever companies."""
+    """
+    Fetch and filter jobs from Lever companies.
+
+    Patch 1: Probes companies IN PARALLEL (max 5 workers) instead of sequentially.
+    """
     import requests
 
     pf = ProfileFilter(profile)
+    companies = _load_companies_for_ats("lever")
+
+    if not companies:
+        return []
+
     all_jobs = []
+    kept_total = 0
+    filtered_total = 0
+
+    # Patch 1: Parallel company probing
+    logger.info(f"Lever: Probing {len(companies)} companies in parallel")
+    with ThreadPoolExecutor(max_workers=5, thread_name_prefix="lever") as executor:
+        futures = {
+            executor.submit(_fetch_one_lever_company, company_name, slug, pf): company_name
+            for company_name, slug in companies.items()
+        }
+
+        for future in as_completed(futures):
+            company_name = futures[future]
+            try:
+                jobs, kept, filtered = future.result(timeout=20)
+                all_jobs.extend(jobs)
+                kept_total += kept
+                filtered_total += filtered
+            except Exception as e:
+                logger.warning(f"Lever {company_name} error: {e}")
+
+    logger.info(f"Lever: {kept_total} kept, {filtered_total} filtered out, from {len(companies)} companies (parallel)")
+    return all_jobs
+
+
+def _fetch_one_lever_company(company_name: str, slug: str, pf) -> tuple:
+    """
+    Fetch jobs from one Lever company and filter them.
+
+    Patch 1: Helper for parallel company probing.
+
+    Returns:
+        Tuple of (jobs_list, kept_count, filtered_count)
+    """
+    import requests
+
+    jobs = []
     kept = 0
     filtered = 0
 
-    # Load companies (UNION of hardcoded + DB discoveries)
-    companies = _load_companies_for_ats("lever")
+    try:
+        url = f"https://api.lever.co/v0/postings/{slug}?mode=json"
+        resp = requests.get(url, verify=False, timeout=15, headers={
+            "User-Agent": "JobRadar/1.0 (personal job search tool)"
+        })
 
-    for company_name, slug in companies.items():
-        try:
-            url = f"https://api.lever.co/v0/postings/{slug}?mode=json"
-            resp = requests.get(url, verify=False, timeout=15, headers={
-                "User-Agent": "JobRadar/1.0 (personal job search tool)"
+        if resp.status_code != 200:
+            return jobs, kept, filtered
+
+        postings = resp.json()
+        if not isinstance(postings, list):
+            return jobs, kept, filtered
+
+        for posting in postings:
+            title = posting.get("text", "")
+            categories = posting.get("categories", {})
+            department = categories.get("department", "")
+            team = categories.get("team", "")
+            job_location = categories.get("location", "")
+            desc_text = posting.get("descriptionPlain", "")
+
+            searchable = f"{title} {department} {team} {desc_text}"
+
+            # ── Dynamic filtering ──
+            keep, reason = pf.should_keep(title, searchable)
+            if not keep:
+                filtered += 1
+                continue
+
+            # Find matching skills
+            searchable_lower = searchable.lower()
+            matching_skills = [s for s in pf.core_skills if s.lower() in searchable_lower]
+
+            apply_url = posting.get("hostedUrl", "") or posting.get("applyUrl", "")
+
+            jobs.append({
+                "title": title[:150],
+                "company": company_name,
+                "location": job_location[:100],
+                "source_url": apply_url,
+                "source_domain": "lever.co",
+                "description_snippet": desc_text[:300],
+                "posted_date": "",
+                "skills_found": json.dumps(matching_skills[:8]),
             })
+            kept += 1
 
-            if resp.status_code != 200:
-                continue
+    except Exception as e:
+        logger.debug(f"[lever] {company_name}: {e}")
 
-            postings = resp.json()
-            if not isinstance(postings, list):
-                continue
-
-            for posting in postings:
-                title = posting.get("text", "")
-                categories = posting.get("categories", {})
-                department = categories.get("department", "")
-                team = categories.get("team", "")
-                job_location = categories.get("location", "")
-                desc_text = posting.get("descriptionPlain", "")
-
-                searchable = f"{title} {department} {team} {desc_text}"
-
-                # ── Dynamic filtering ──
-                keep, reason = pf.should_keep(title, searchable)
-                if not keep:
-                    filtered += 1
-                    continue
-
-                # Find matching skills
-                searchable_lower = searchable.lower()
-                matching_skills = [s for s in pf.core_skills if s.lower() in searchable_lower]
-
-                apply_url = posting.get("hostedUrl", "") or posting.get("applyUrl", "")
-
-                all_jobs.append({
-                    "title": title[:150],
-                    "company": company_name,
-                    "location": job_location[:100],
-                    "source_url": apply_url,
-                    "source_domain": "lever.co",
-                    "description_snippet": desc_text[:300],
-                    "posted_date": "",
-                    "skills_found": json.dumps(matching_skills[:8]),
-                })
-                kept += 1
-
-            time.sleep(delay)
-
-        except Exception as e:
-            logger.warning(f"Lever {company_name} error: {e}")
-            continue
-
-    logger.info(f"Lever: {kept} kept, {filtered} filtered out, from {len(companies)} companies")
-    return all_jobs
+    return jobs, kept, filtered
 
 
 # ============================================================
@@ -595,86 +674,124 @@ def fetch_lever_jobs(profile, delay=0.5):
 # ============================================================
 
 def fetch_ashby_jobs(profile, delay=0.5):
-    """Fetch and filter jobs from Ashby companies."""
+    """
+    Fetch and filter jobs from Ashby companies.
+
+    Patch 1: Probes companies IN PARALLEL (max 6 workers) instead of sequentially.
+    """
     import requests
 
     pf = ProfileFilter(profile)
+    companies = _load_companies_for_ats("ashby")
+
+    if not companies:
+        return []
+
     all_jobs = []
+    kept_total = 0
+    filtered_total = 0
+
+    # Patch 1: Parallel company probing
+    logger.info(f"Ashby: Probing {len(companies)} companies in parallel")
+    with ThreadPoolExecutor(max_workers=6, thread_name_prefix="ashby") as executor:
+        futures = {
+            executor.submit(_fetch_one_ashby_company, company_name, slug, pf): company_name
+            for company_name, slug in companies.items()
+        }
+
+        for future in as_completed(futures):
+            company_name = futures[future]
+            try:
+                jobs, kept, filtered = future.result(timeout=20)
+                all_jobs.extend(jobs)
+                kept_total += kept
+                filtered_total += filtered
+            except Exception as e:
+                logger.warning(f"Ashby {company_name} error: {e}")
+
+    logger.info(f"Ashby: {kept_total} kept, {filtered_total} filtered out, from {len(companies)} companies (parallel)")
+    return all_jobs
+
+
+def _fetch_one_ashby_company(company_name: str, slug: str, pf) -> tuple:
+    """
+    Fetch jobs from one Ashby company and filter them.
+
+    Patch 1: Helper for parallel company probing.
+
+    Returns:
+        Tuple of (jobs_list, kept_count, filtered_count)
+    """
+    import requests
+
+    jobs = []
     kept = 0
     filtered = 0
 
-    # Load companies (UNION of hardcoded + DB discoveries)
-    companies = _load_companies_for_ats("ashby")
+    try:
+        url = f"https://api.ashbyhq.com/posting-api/job-board/{slug}?includeCompensation=true"
+        resp = requests.get(url, verify=False, timeout=15, headers={
+            "User-Agent": "JobRadar/1.0 (personal job search tool)"
+        })
 
-    for company_name, slug in companies.items():
-        try:
-            url = f"https://api.ashbyhq.com/posting-api/job-board/{slug}?includeCompensation=true"
-            resp = requests.get(url, verify=False, timeout=15, headers={
-                "User-Agent": "JobRadar/1.0 (personal job search tool)"
-            })
+        if resp.status_code != 200:
+            return jobs, kept, filtered
 
-            if resp.status_code != 200:
+        data = resp.json()
+        jobs_list = data.get("jobs", [])
+
+        for job in jobs_list:
+            title = job.get("title", "")
+            job_location = job.get("location", "")
+            desc_plain = job.get("descriptionPlain", "")
+            desc_html = job.get("descriptionHtml", "")
+            job_url = job.get("jobUrl", "")
+            apply_url = job.get("applyUrl", "")
+            department = job.get("department", "")
+            compensation = job.get("compensation", {})
+
+            # Clean description
+            if desc_plain:
+                clean_desc = desc_plain
+            elif desc_html:
+                clean_desc = html.unescape(desc_html)
+                clean_desc = re.sub(r"<[^>]+>", " ", clean_desc)
+                clean_desc = re.sub(r"\s+", " ", clean_desc).strip()
+            else:
+                clean_desc = ""
+
+            searchable = f"{title} {department} {clean_desc}"
+
+            # ── Dynamic filtering ──
+            keep, reason = pf.should_keep(title, searchable)
+            if not keep:
+                filtered += 1
                 continue
 
-            data = resp.json()
-            jobs_list = data.get("jobs", [])
+            # Find matching skills
+            searchable_lower = searchable.lower()
+            matching_skills = [s for s in pf.core_skills if s.lower() in searchable_lower]
 
-            for job in jobs_list:
-                title = job.get("title", "")
-                job_location = job.get("location", "")
-                desc_plain = job.get("descriptionPlain", "")
-                desc_html = job.get("descriptionHtml", "")
-                job_url = job.get("jobUrl", "")
-                apply_url = job.get("applyUrl", "")
-                department = job.get("department", "")
-                compensation = job.get("compensation", {})
+            # Extract salary info if available
+            salary_info = ""
+            if compensation:
+                salary_summary = compensation.get("compensationTierSummary", "")
+                if salary_summary:
+                    salary_info = f" | Compensation: {salary_summary}"
 
-                # Clean description
-                if desc_plain:
-                    clean_desc = desc_plain
-                elif desc_html:
-                    clean_desc = html.unescape(desc_html)
-                    clean_desc = re.sub(r"<[^>]+>", " ", clean_desc)
-                    clean_desc = re.sub(r"\s+", " ", clean_desc).strip()
-                else:
-                    clean_desc = ""
+            jobs.append({
+                "title": title[:150],
+                "company": company_name,
+                "location": job_location[:100] if isinstance(job_location, str) else "",
+                "source_url": job_url or apply_url,
+                "source_domain": "ashbyhq.com",
+                "description_snippet": (clean_desc[:280] + salary_info)[:300],
+                "posted_date": job.get("publishedAt", "")[:10] if job.get("publishedAt") else "",
+                "skills_found": json.dumps(matching_skills[:8]),
+            })
+            kept += 1
 
-                searchable = f"{title} {department} {clean_desc}"
+    except Exception as e:
+        logger.debug(f"[ashby] {company_name}: {e}")
 
-                # ── Dynamic filtering ──
-                keep, reason = pf.should_keep(title, searchable)
-                if not keep:
-                    filtered += 1
-                    continue
-
-                # Find matching skills
-                searchable_lower = searchable.lower()
-                matching_skills = [s for s in pf.core_skills if s.lower() in searchable_lower]
-
-                # Extract salary info if available
-                salary_info = ""
-                if compensation:
-                    salary_summary = compensation.get("compensationTierSummary", "")
-                    if salary_summary:
-                        salary_info = f" | Compensation: {salary_summary}"
-
-                all_jobs.append({
-                    "title": title[:150],
-                    "company": company_name,
-                    "location": job_location[:100] if isinstance(job_location, str) else "",
-                    "source_url": job_url or apply_url,
-                    "source_domain": "ashbyhq.com",
-                    "description_snippet": (clean_desc[:280] + salary_info)[:300],
-                    "posted_date": job.get("publishedAt", "")[:10] if job.get("publishedAt") else "",
-                    "skills_found": json.dumps(matching_skills[:8]),
-                })
-                kept += 1
-
-            time.sleep(delay)
-
-        except Exception as e:
-            logger.warning(f"Ashby {company_name} error: {e}")
-            continue
-
-    logger.info(f"Ashby: {kept} kept, {filtered} filtered out, from {len(companies)} companies")
-    return all_jobs
+    return jobs, kept, filtered

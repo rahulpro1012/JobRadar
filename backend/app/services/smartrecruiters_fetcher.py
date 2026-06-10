@@ -8,12 +8,15 @@ Note: Full job descriptions require a separate per-job API call.
 We skip that to avoid excessive calls and rely on title-based filtering.
 
 Docs: https://dev.smartrecruiters.com/customer-api/live-docs/posting-api/
+
+Patch 1: Parallelized company probing.
 """
 import json
 import time
 import logging
 import requests
 from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from app.services.ats_fetcher import ProfileFilter, _load_companies_for_ats
 from app.services.source_health import is_healthy, record_success, record_failure
 from app.database import get_connection
@@ -80,6 +83,8 @@ def fetch_smartrecruiters_jobs(profile: dict, delay: float = 0.3) -> list:
     """
     Fetch jobs from registered SmartRecruiters companies and filter by profile.
 
+    Patch 1: Probes companies IN PARALLEL (max 8 workers) instead of sequentially.
+
     Args:
         profile: Parsed user profile dict.
         delay:   Seconds to sleep between company fetches (rate courtesy).
@@ -92,34 +97,69 @@ def fetch_smartrecruiters_jobs(profile: dict, delay: float = 0.3) -> list:
         return []
 
     pf = ProfileFilter(profile)
-    all_jobs = []
-    skipped = 0
-    
-    # Load dynamic company list (hardcoded + discovered)
     companies = _load_companies_for_ats(SOURCE_NAME)
 
-    for company_display_name, company_id in companies.items():
-        # Issue 5: Skip if checked recently with 0 jobs
-        if _should_skip_company(company_id):
-            logger.debug(f"[{SOURCE_NAME}] {company_id} skipped (checked <24h ago, 0 jobs)")
-            skipped += 1
-            continue
+    if not companies:
+        return []
 
-        try:
-            url = f"https://api.smartrecruiters.com/v1/companies/{company_id}/postings"
-            resp = requests.get(url, params={"limit": 100}, timeout=10, verify=False)
-            if resp.status_code in (404, 403):
-                skipped += 1
-                continue
-            if resp.status_code != 200:
-                record_failure(SOURCE_NAME, f"{company_id}: HTTP {resp.status_code}")
-                continue
-            data = resp.json()
-            logger.info(f"[{SOURCE_NAME}] raw keys: {list(data.keys())}, sample: {json.dumps(data)[:300]}")
-        except Exception as e:
-            record_failure(SOURCE_NAME, f"{company_id}: {e}")
-            logger.warning(f"[{SOURCE_NAME}] {company_id} error: {e}")
-            continue
+    all_jobs = []
+    skipped = 0
+
+    # Patch 1: Parallel company probing
+    logger.info(f"[{SOURCE_NAME}] Probing {len(companies)} companies in parallel")
+    with ThreadPoolExecutor(max_workers=8, thread_name_prefix="sr") as executor:
+        futures = {
+            executor.submit(_fetch_one_smartrecruiters_company, company_display_name, company_id, pf): company_id
+            for company_display_name, company_id in companies.items()
+        }
+
+        for future in as_completed(futures):
+            company_id = futures[future]
+            try:
+                jobs, skip_count = future.result(timeout=15)
+                all_jobs.extend(jobs)
+                skipped += skip_count
+            except Exception as e:
+                logger.warning(f"[{SOURCE_NAME}] {company_id} error: {e}")
+                record_failure(SOURCE_NAME, f"{company_id}: {e}")
+
+    record_success(SOURCE_NAME, jobs_returned=len(all_jobs))
+    logger.info(
+        f"[{SOURCE_NAME}] {len(all_jobs)} jobs kept "
+        f"(404/403 companies skipped: {skipped}, parallel)"
+    )
+    return all_jobs
+
+
+def _fetch_one_smartrecruiters_company(company_display_name: str, company_id: str, pf) -> tuple:
+    """
+    Fetch jobs from one SmartRecruiters company and filter them.
+
+    Patch 1: Helper for parallel company probing.
+
+    Returns:
+        Tuple of (jobs_list, skip_count)
+    """
+    jobs = []
+    skip_count = 0
+
+    # Issue 5: Skip if checked recently with 0 jobs
+    if _should_skip_company(company_id):
+        logger.debug(f"[{SOURCE_NAME}] {company_id} skipped (checked <24h ago, 0 jobs)")
+        return jobs, 1
+
+    try:
+        url = f"https://api.smartrecruiters.com/v1/companies/{company_id}/postings"
+        resp = requests.get(url, params={"limit": 100}, timeout=10, verify=False)
+
+        if resp.status_code in (404, 403):
+            return jobs, 1
+
+        if resp.status_code != 200:
+            record_failure(SOURCE_NAME, f"{company_id}: HTTP {resp.status_code}")
+            return jobs, 0
+
+        data = resp.json()
 
         for j in data.get("content", []):
             title = (j.get("name") or "").strip()
@@ -143,7 +183,7 @@ def fetch_smartrecruiters_jobs(profile: dict, delay: float = 0.3) -> list:
             if not job_url:
                 continue
 
-            all_jobs.append({
+            jobs.append({
                 "title": title[:150],
                 "company": company_display_name[:100],
                 "location": location_str[:100],
@@ -154,11 +194,7 @@ def fetch_smartrecruiters_jobs(profile: dict, delay: float = 0.3) -> list:
                 "skills_found": json.dumps([]),
             })
 
-        time.sleep(delay)
+    except Exception as e:
+        logger.debug(f"[smartrecruiters] {company_id}: {e}")
 
-    record_success(SOURCE_NAME, jobs_returned=len(all_jobs))
-    logger.info(
-        f"[{SOURCE_NAME}] {len(all_jobs)} jobs kept "
-        f"(404/403 companies skipped: {skipped})"
-    )
-    return all_jobs
+    return jobs, skip_count
