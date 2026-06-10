@@ -27,7 +27,12 @@ DAILY_LIMIT_FAST = 200
 # ============================================================
 
 def _call_groq(prompt, system_prompt, model=FAST_MODEL, max_tokens=2000, temperature=0.3):
-    """Call Groq API with quota tracking."""
+    """Call Groq API with quota tracking and 429 retry/backoff.
+
+    On HTTP 429 (TPM rate limit), retries up to 3 times honoring the
+    Retry-After header when present, else backing off 5 → 10 → 20s.
+    Quota is only counted on a successful (200) response.
+    """
     import requests
 
     quota_key = QUOTA_GROQ_SMART if model == SMART_MODEL else QUOTA_GROQ_FAST
@@ -43,39 +48,59 @@ def _call_groq(prompt, system_prompt, model=FAST_MODEL, max_tokens=2000, tempera
     if not api_key:
         return None
 
-    try:
-        resp = requests.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            verify=False,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": prompt},
-                ],
-                "max_tokens": max_tokens,
-                "temperature": temperature,
-            },
-            timeout=30,
-        )
-        increment_quota(quota_key, today)
+    backoffs = [5, 10, 20]  # seconds between attempts on 429
+    max_attempts = len(backoffs) + 1
 
-        if resp.status_code == 429:
-            time.sleep(5)
+    for attempt in range(max_attempts):
+        try:
+            resp = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                verify=False,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": prompt},
+                    ],
+                    "max_tokens": max_tokens,
+                    "temperature": temperature,
+                },
+                timeout=30,
+            )
+
+            if resp.status_code == 429:
+                if attempt < max_attempts - 1:
+                    # Honor Retry-After if Groq sends it, else use backoff schedule
+                    retry_after = resp.headers.get("Retry-After")
+                    try:
+                        wait = float(retry_after) if retry_after else backoffs[attempt]
+                    except (TypeError, ValueError):
+                        wait = backoffs[attempt]
+                    logger.warning(
+                        f"Groq 429 (TPM limit), retry {attempt + 1}/{max_attempts - 1} in {wait:.0f}s"
+                    )
+                    time.sleep(wait)
+                    continue
+                logger.warning("Groq 429 (TPM limit) — retries exhausted, giving up")
+                return None
+
+            if resp.status_code != 200:
+                logger.warning(f"Groq API error: {resp.status_code} {resp.text[:200]}")
+                return None
+
+            # Success — count quota once
+            increment_quota(quota_key, today)
+            return resp.json()["choices"][0]["message"]["content"].strip()
+
+        except Exception as e:
+            logger.warning(f"Groq API call failed: {e}")
             return None
-        if resp.status_code != 200:
-            logger.warning(f"Groq API error: {resp.status_code} {resp.text[:200]}")
-            return None
 
-        return resp.json()["choices"][0]["message"]["content"].strip()
-
-    except Exception as e:
-        logger.warning(f"Groq API call failed: {e}")
-        return None
+    return None
 
 
 _groq_api_key = None
@@ -785,9 +810,10 @@ Red flag types: seniority_mismatch, stale_posting, underpaid, generic_jd, experi
             logger.error(f"C1: Exception parsing batch of {len(batch)} jobs: {e}")
             continue
 
-        # Pause between batches to stay under TPM limit (skip after last batch)
+        # Pause between batches to stay under Groq's per-minute TPM limit
+        # (skip after last batch). 8s keeps cumulative tokens/min well under 6000.
         if i + batch_size < len(jobs):
-            time.sleep(2.0)
+            time.sleep(8.0)
 
     logger.info(f"C1: Total {len(results)} jobs analyzed across {total_batches} batches")
     return results

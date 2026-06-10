@@ -63,7 +63,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     duplicate_cluster_id INTEGER DEFAULT NULL,
     also_on TEXT DEFAULT '[]',
     ai_score INTEGER DEFAULT NULL,
-    ai_reason TEXT DEFAULT ''
+    ai_reason TEXT DEFAULT '',
+    dismissed_at TIMESTAMP DEFAULT NULL
 );
 
 -- Multi-level blacklist
@@ -261,8 +262,24 @@ def init_db(app_config):
     # Create tables
     with get_connection() as conn:
         conn.executescript(SCHEMA_SQL)
+        _ensure_columns(conn)
         _seed_default_companies(conn)
         conn.commit()
+
+
+def _ensure_columns(conn):
+    """Idempotently add columns missing from pre-existing databases.
+
+    CREATE TABLE IF NOT EXISTS won't alter an existing table, so columns
+    added after a DB was first created must be backfilled here.
+    """
+    # jobs.dismissed_at (Dismiss feature)
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(jobs)").fetchall()]
+    if "dismissed_at" not in cols:
+        conn.execute("ALTER TABLE jobs ADD COLUMN dismissed_at TIMESTAMP DEFAULT NULL")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_jobs_dismissed_at ON jobs(dismissed_at)"
+    )
 
 
 def _seed_default_companies(conn):
@@ -327,16 +344,32 @@ def dict_from_row(row):
     if row is None:
         return None
     d = dict(row)
-    json_fields = [
+    # Fields stored as JSON arrays (default to [] on parse failure)
+    json_array_fields = [
         "role_variants", "core_skills", "secondary_skills",
-        "tools", "domain_keywords", "skills_found", "also_on"
+        "tools", "domain_keywords", "skills_found", "also_on",
+        # C1 structured analysis (arrive via LEFT JOIN job_ai_analysis)
+        "apply_reasons", "skip_reasons", "red_flags",
+        # A1 tiered profile
+        "deal_breakers",
     ]
-    for field in json_fields:
+    for field in json_array_fields:
         if field in d and isinstance(d[field], str):
             try:
                 d[field] = json.loads(d[field])
             except (json.JSONDecodeError, TypeError):
                 d[field] = []
+    # Fields stored as JSON objects (default to {} on parse failure)
+    json_object_fields = ["skills_tiered", "preferences_explicit"]
+    for field in json_object_fields:
+        if field in d and isinstance(d[field], str):
+            if not d[field].strip():
+                d[field] = {}
+                continue
+            try:
+                d[field] = json.loads(d[field])
+            except (json.JSONDecodeError, TypeError):
+                d[field] = {}
     return d
 
 

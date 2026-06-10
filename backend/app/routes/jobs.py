@@ -17,26 +17,39 @@ def get_jobs():
     page = request.args.get("page", 1, type=int)
     per_page = request.args.get("per_page", 20, type=int)
 
+    include_dismissed = request.args.get("include_dismissed", "false").lower() == "true"
+
     conditions, params = [], []
 
     if status and status != "all":
-        conditions.append("status = ?"); params.append(status)
+        conditions.append("j.status = ?"); params.append(status)
     if min_score is not None:
-        conditions.append("adjusted_score >= ?"); params.append(min_score)
+        conditions.append("j.adjusted_score >= ?"); params.append(min_score)
     if source:
-        conditions.append("source_domain LIKE ?"); params.append(f"%{source}%")
+        conditions.append("j.source_domain LIKE ?"); params.append(f"%{source}%")
     if days:
-        conditions.append("fetched_date >= datetime('now', ?)"); params.append(f"-{days} days")
+        conditions.append("j.fetched_date >= datetime('now', ?)"); params.append(f"-{days} days")
+    # Dismiss feature: hide dismissed jobs unless explicitly requested
+    if not include_dismissed:
+        conditions.append("j.dismissed_at IS NULL")
 
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
     offset = (page - 1) * per_page
 
-    count_result = execute_query(f"SELECT COUNT(*) as total FROM jobs {where}", params, fetch_one=True)
+    # Count is unaffected by the LEFT JOIN (job_ai_analysis is 1:0..1 on job_id)
+    count_result = execute_query(f"SELECT COUNT(*) as total FROM jobs j {where}", params, fetch_one=True)
     total = count_result["total"] if count_result else 0
 
+    # C1: LEFT JOIN structured analysis so reasons/flags arrive with the list.
+    # fit_summary aliased to ai_fit_summary to avoid confusion with jobs.ai_reason.
     jobs = execute_query(
-        f"""SELECT * FROM jobs {where}
-            ORDER BY adjusted_score DESC, fetched_date DESC
+        f"""SELECT j.*,
+                   a.apply_reasons, a.skip_reasons, a.red_flags,
+                   a.fit_summary AS ai_fit_summary, a.analyzed_at
+            FROM jobs j
+            LEFT JOIN job_ai_analysis a ON a.job_id = j.id
+            {where}
+            ORDER BY j.adjusted_score DESC, j.fetched_date DESC
             LIMIT ? OFFSET ?""",
         params + [per_page, offset], fetch_all=True
     )
@@ -50,7 +63,15 @@ def get_jobs():
 
 @jobs_bp.route("/jobs/<int:job_id>", methods=["GET"])
 def get_job(job_id):
-    job = execute_query("SELECT * FROM jobs WHERE id = ?", (job_id,), fetch_one=True)
+    job = execute_query(
+        """SELECT j.*,
+                  a.apply_reasons, a.skip_reasons, a.red_flags,
+                  a.fit_summary AS ai_fit_summary, a.analyzed_at
+           FROM jobs j
+           LEFT JOIN job_ai_analysis a ON a.job_id = j.id
+           WHERE j.id = ?""",
+        (job_id,), fetch_one=True
+    )
     if not job:
         return jsonify({"error": "Job not found"}), 404
     return jsonify(job)
@@ -77,6 +98,93 @@ def get_job_analysis(job_id):
         "analyzed_at": row["analyzed_at"],
     }
     return jsonify({"analysis": analysis}), 200
+
+
+# ============================================================
+# Dismiss feature (Phase 1): single + bulk dismiss/undismiss
+# ============================================================
+
+@jobs_bp.route("/jobs/<int:job_id>/dismiss", methods=["POST"])
+def dismiss_job(job_id):
+    """Mark a single job as dismissed (hidden from default views)."""
+    from datetime import datetime as _dt
+    now = _dt.utcnow().isoformat()
+    with get_connection() as conn:
+        cur = conn.execute(
+            "UPDATE jobs SET dismissed_at = ? WHERE id = ? AND dismissed_at IS NULL",
+            (now, job_id),
+        )
+        conn.commit()
+    if cur.rowcount == 0:
+        return jsonify({"error": "Job not found or already dismissed"}), 404
+    return jsonify({"success": True, "job_id": job_id, "dismissed_at": now}), 200
+
+
+@jobs_bp.route("/jobs/<int:job_id>/undismiss", methods=["POST"])
+def undismiss_job(job_id):
+    """Restore a dismissed job (used by undo)."""
+    with get_connection() as conn:
+        cur = conn.execute(
+            "UPDATE jobs SET dismissed_at = NULL WHERE id = ?", (job_id,)
+        )
+        conn.commit()
+    if cur.rowcount == 0:
+        return jsonify({"error": "Job not found"}), 404
+    return jsonify({"success": True, "job_id": job_id}), 200
+
+
+@jobs_bp.route("/jobs/bulk-dismiss", methods=["POST"])
+def bulk_dismiss_jobs():
+    """Dismiss multiple jobs at once. Body: {"job_ids": [1, 2, 3]}"""
+    data = request.get_json() or {}
+    job_ids = data.get("job_ids", [])
+    if not job_ids or not isinstance(job_ids, list):
+        return jsonify({"error": "job_ids must be a non-empty list"}), 400
+    if len(job_ids) > 200:
+        return jsonify({"error": "Maximum 200 jobs per bulk operation"}), 400
+    try:
+        job_ids = [int(j) for j in job_ids]
+    except (TypeError, ValueError):
+        return jsonify({"error": "All job_ids must be integers"}), 400
+
+    from datetime import datetime as _dt
+    now = _dt.utcnow().isoformat()
+    placeholders = ",".join("?" * len(job_ids))
+    with get_connection() as conn:
+        cur = conn.execute(
+            f"UPDATE jobs SET dismissed_at = ? "
+            f"WHERE id IN ({placeholders}) AND dismissed_at IS NULL",
+            [now] + job_ids,
+        )
+        conn.commit()
+    return jsonify({
+        "success": True,
+        "dismissed_count": cur.rowcount,
+        "requested_count": len(job_ids),
+        "job_ids": job_ids,
+    }), 200
+
+
+@jobs_bp.route("/jobs/bulk-undismiss", methods=["POST"])
+def bulk_undismiss_jobs():
+    """Undo a bulk dismiss. Body: {"job_ids": [1, 2, 3]}"""
+    data = request.get_json() or {}
+    job_ids = data.get("job_ids", [])
+    if not job_ids or not isinstance(job_ids, list):
+        return jsonify({"error": "job_ids required"}), 400
+    try:
+        job_ids = [int(j) for j in job_ids]
+    except (TypeError, ValueError):
+        return jsonify({"error": "All job_ids must be integers"}), 400
+
+    placeholders = ",".join("?" * len(job_ids))
+    with get_connection() as conn:
+        cur = conn.execute(
+            f"UPDATE jobs SET dismissed_at = NULL WHERE id IN ({placeholders})",
+            job_ids,
+        )
+        conn.commit()
+    return jsonify({"success": True, "undismissed_count": cur.rowcount, "job_ids": job_ids}), 200
 
 
 @jobs_bp.route("/jobs/<int:job_id>/status", methods=["PATCH"])
@@ -109,21 +217,24 @@ def update_job_status(job_id):
 
 @jobs_bp.route("/jobs/stats", methods=["GET"])
 def get_job_stats():
+    # Dismiss feature: counts reflect ACTIVE (non-dismissed) jobs so the UI's
+    # tab/stat numbers match the default list (which hides dismissed).
     with get_connection() as conn:
-        total = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+        total = conn.execute("SELECT COUNT(*) FROM jobs WHERE dismissed_at IS NULL").fetchone()[0]
+        dismissed = conn.execute("SELECT COUNT(*) FROM jobs WHERE dismissed_at IS NOT NULL").fetchone()[0]
         status_counts = {}
-        for row in conn.execute("SELECT status, COUNT(*) FROM jobs GROUP BY status"):
+        for row in conn.execute("SELECT status, COUNT(*) FROM jobs WHERE dismissed_at IS NULL GROUP BY status"):
             status_counts[row[0]] = row[1]
-        excellent = conn.execute("SELECT COUNT(*) FROM jobs WHERE adjusted_score >= 80").fetchone()[0]
-        good = conn.execute("SELECT COUNT(*) FROM jobs WHERE adjusted_score >= 60 AND adjusted_score < 80").fetchone()[0]
-        partial = conn.execute("SELECT COUNT(*) FROM jobs WHERE adjusted_score >= 40 AND adjusted_score < 60").fetchone()[0]
-        low = conn.execute("SELECT COUNT(*) FROM jobs WHERE adjusted_score < 40").fetchone()[0]
+        excellent = conn.execute("SELECT COUNT(*) FROM jobs WHERE dismissed_at IS NULL AND adjusted_score >= 80").fetchone()[0]
+        good = conn.execute("SELECT COUNT(*) FROM jobs WHERE dismissed_at IS NULL AND adjusted_score >= 60 AND adjusted_score < 80").fetchone()[0]
+        partial = conn.execute("SELECT COUNT(*) FROM jobs WHERE dismissed_at IS NULL AND adjusted_score >= 40 AND adjusted_score < 60").fetchone()[0]
+        low = conn.execute("SELECT COUNT(*) FROM jobs WHERE dismissed_at IS NULL AND adjusted_score < 40").fetchone()[0]
         source_counts = {}
-        for row in conn.execute("SELECT source_domain, COUNT(*) FROM jobs GROUP BY source_domain"):
+        for row in conn.execute("SELECT source_domain, COUNT(*) FROM jobs WHERE dismissed_at IS NULL GROUP BY source_domain"):
             source_counts[row[0]] = row[1]
 
     return jsonify({
-        "total": total, "by_status": status_counts,
+        "total": total, "dismissed": dismissed, "by_status": status_counts,
         "by_score": {"excellent": excellent, "good": good, "partial": partial, "low": low},
         "by_source": source_counts
     })
@@ -143,39 +254,12 @@ def refresh_jobs():
     from app.services.scorer import score_all_jobs
 
     try:
-        # ── Step 0: AI generates location-aware queries ──
+        # ── Step 0: Query generation ──
+        # C1 429 fix: the legacy ai_generate_queries() Groq call was removed here.
+        # fetch_all_jobs() already generates A2 source-aware queries internally
+        # (ai_generate_source_aware_queries), so a second query-gen call only
+        # burned ~900 tokens/min of Groq's TPM budget and starved C1 batches.
         ai_query_count = 0
-        try:
-            from app.services.ai_agent import ai_generate_queries, is_ai_enabled
-            if is_ai_enabled():
-                # Get search locations from profile
-                search_locations = []
-                loc = profile.get("location", "")
-                if loc:
-                    search_locations.append(loc)
-
-                extra_locs = profile.get("search_locations", "")
-                if extra_locs:
-                    import json as _json
-                    if isinstance(extra_locs, str):
-                        try:
-                            extra_locs = _json.loads(extra_locs)
-                        except (ValueError, TypeError):
-                            extra_locs = [x.strip() for x in extra_locs.split(",") if x.strip()]
-                    if isinstance(extra_locs, list):
-                        search_locations.extend(extra_locs)
-
-                if "India" not in search_locations:
-                    search_locations.append("India")
-                if "Remote" not in search_locations:
-                    search_locations.append("Remote")
-
-                ai_queries = ai_generate_queries(profile, search_locations=search_locations)
-                if ai_queries:
-                    ai_query_count = len(ai_queries)
-                    current_app.config["_ai_queries"] = ai_queries
-        except Exception as e:
-            logger.info(f"AI query generation skipped: {e}")
 
         # ── Step 1: Fetch ──
         new_count = fetch_all_jobs(profile, current_app.config)
@@ -307,36 +391,8 @@ def refresh_jobs_async():
     from app.services.job_fetcher import trigger_async_refresh
 
     try:
-        # Generate AI queries if available
-        try:
-            from app.services.ai_agent import ai_generate_queries, is_ai_enabled
-            if is_ai_enabled():
-                search_locations = []
-                loc = profile.get("location", "")
-                if loc:
-                    search_locations.append(loc)
-
-                extra_locs = profile.get("search_locations", "")
-                if extra_locs:
-                    import json as _json
-                    if isinstance(extra_locs, str):
-                        try:
-                            extra_locs = _json.loads(extra_locs)
-                        except (ValueError, TypeError):
-                            extra_locs = [x.strip() for x in extra_locs.split(",") if x.strip()]
-                    if isinstance(extra_locs, list):
-                        search_locations.extend(extra_locs)
-
-                if "India" not in search_locations:
-                    search_locations.append("India")
-                if "Remote" not in search_locations:
-                    search_locations.append("Remote")
-
-                ai_queries = ai_generate_queries(profile, search_locations=search_locations)
-                if ai_queries:
-                    current_app.config["_ai_queries"] = ai_queries
-        except Exception as e:
-            logger.info(f"AI query generation skipped: {e}")
+        # C1 429 fix: legacy ai_generate_queries() Groq call removed here too.
+        # The async pipeline generates A2 source-aware queries inside fetch_all_jobs.
 
         # Trigger background job
         job_id = trigger_async_refresh(profile, current_app.config)
