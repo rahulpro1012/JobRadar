@@ -645,56 +645,86 @@ def _run_refresh_background(job_id, profile, config):
     Background thread: Execute Phase 1 (parallel fetch), apply filters,
     score, and store to DB. Updates refresh_jobs table with progress.
     """
-    from app.database import update_refresh_job, get_connection
+    from app.database import update_refresh_job, get_connection, execute_query
     import json
 
     try:
         # === STAGE 1: Parallel fetch all layers ===
+        # fetch_all_jobs stores jobs to the DB and returns the new-job COUNT (int),
+        # so the rest of the pipeline operates on the DB (mirrors the sync path).
         logger.info(f"[RefreshJob {job_id}] Starting Phase 1: parallel fetch...")
         update_refresh_job(job_id, status='running')
 
-        all_jobs = fetch_all_jobs(profile, config)
+        new_count = fetch_all_jobs(profile, config)
 
-        # === STAGE 2: Apply filters + rule-based scoring ===
+        # === STAGE 2: Apply filters + dedup + rule-based scoring (DB-based) ===
         logger.info(f"[RefreshJob {job_id}] Stage 2: applying filters...")
-        from app.services.blacklist_engine import apply_blacklist_filters
+        from app.services.blacklist_engine import apply_blacklist
         from app.services.deduplicator import deduplicate_jobs
-        from app.services.scorer import score_jobs
+        from app.services.scorer import score_all_jobs
 
-        all_jobs = apply_blacklist_filters(all_jobs)
-        all_jobs = deduplicate_jobs(all_jobs)
-        all_jobs = score_jobs(all_jobs)
+        filtered = apply_blacklist()
+        deduped = deduplicate_jobs()
+        scored = score_all_jobs(profile)
+        logger.info(f"[RefreshJob {job_id}] Stage 2 done: {filtered} filtered, {deduped} deduped, {scored} scored")
 
-        # Store jobs with rule-based scores (AI pending)
-        new_count = _store_jobs(all_jobs)
+        update_refresh_job(job_id, jobs_new=new_count)
 
-        update_refresh_job(
-            job_id,
-            jobs_fetched=len(all_jobs),
-            jobs_new=new_count
-        )
-
-        # === STAGE 3: AI scoring (top 16 jobs) ===
+        # === STAGE 3: C1 AI scoring + structured analysis (top 25 jobs) ===
         logger.info(f"[RefreshJob {job_id}] Stage 3: AI scoring top jobs...")
         update_refresh_job(job_id, status='ai_scoring')
 
-        from app.services.ai_agent import score_jobs_with_ai
+        from app.services.ai_agent import analyze_jobs_batch, is_ai_enabled
 
-        top_jobs = sorted(all_jobs, key=lambda j: j.get("match_score", 0), reverse=True)[:16]
-        if top_jobs:
-            ai_results = score_jobs_with_ai(top_jobs)
-            ai_count = 0
-            # Update jobs with AI scores in DB
-            with get_connection() as conn:
-                for job in ai_results:
-                    if "ai_score" in job:
-                        conn.execute("""
-                            UPDATE jobs
-                            SET ai_score = ?, ai_reason = ?
-                            WHERE source_url = ?
-                        """, (job.get("ai_score"), job.get("ai_reason", ""), job.get("source_url")))
-                        ai_count += 1
-                conn.commit()
+        ai_count = 0
+        if is_ai_enabled():
+            top_jobs = execute_query(
+                """SELECT id, title, company, location, description_snippet, match_score
+                   FROM jobs WHERE status = 'new'
+                   ORDER BY match_score DESC LIMIT 25""",
+                fetch_all=True
+            )
+            if top_jobs:
+                analyses = analyze_jobs_batch(top_jobs, profile, batch_size=10)
+                if analyses:
+                    with get_connection() as conn:
+                        for analysis in analyses:
+                            jid = analysis["job_id"]
+                            ai_score = analysis["score"]
+                            base = conn.execute(
+                                "SELECT match_score FROM jobs WHERE id = ?", (jid,)
+                            ).fetchone()
+                            if base:
+                                blended = int(base[0] * 0.6 + ai_score * 0.4)
+                                conn.execute(
+                                    """UPDATE jobs SET adjusted_score = ?, ai_score = ?, ai_reason = ?
+                                       WHERE id = ?""",
+                                    (blended, ai_score, analysis["fit_summary"], jid)
+                                )
+                                try:
+                                    conn.execute(
+                                        """INSERT INTO job_ai_analysis
+                                           (job_id, ai_score, apply_reasons, skip_reasons, fit_summary, red_flags, model_used)
+                                           VALUES (?, ?, ?, ?, ?, ?, ?)
+                                           ON CONFLICT(job_id) DO UPDATE SET
+                                           ai_score = excluded.ai_score,
+                                           apply_reasons = excluded.apply_reasons,
+                                           skip_reasons = excluded.skip_reasons,
+                                           fit_summary = excluded.fit_summary,
+                                           red_flags = excluded.red_flags,
+                                           analyzed_at = datetime('now')""",
+                                        (jid, ai_score,
+                                         json.dumps(analysis.get("apply_reasons", [])),
+                                         json.dumps(analysis.get("skip_reasons", [])),
+                                         analysis["fit_summary"],
+                                         json.dumps(analysis.get("red_flags", [])),
+                                         "llama-3.1-8b-instant")
+                                    )
+                                except Exception as e:
+                                    logger.debug(f"C1: Failed to store analysis for job {jid}: {e}")
+                        conn.commit()
+                    ai_count = len(analyses)
+                    logger.info(f"[RefreshJob {job_id}] C1: Analyzed {ai_count} jobs with structured reasoning")
             update_refresh_job(job_id, jobs_ai_scored=ai_count)
 
         # === Completion ===
