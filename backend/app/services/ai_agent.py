@@ -169,6 +169,133 @@ Critical rules:
         return None
 
 
+def ai_parse_resume_tiered(resume_text):
+    """A1: Parse resume into tiered skills (primary/familiar/learning) + explicit preferences.
+
+    Returns v2 profile with:
+    - schema_version: 2
+    - skills: {primary: [{name, years, evidence}], familiar: [...], learning: [...]}
+    - preferences: {preferred_locations, avoid_locations, company_types, deal_breakers}
+    - plus all existing v1 fields for backward compatibility
+    """
+    if not is_ai_enabled():
+        return None
+
+    system_prompt = """You are an expert technical recruiter analyzing a developer's resume.
+Extract TIERED skills, explicit preferences, and career intelligence.
+
+CRITICAL skill distinctions:
+1. PRIMARY skills = used in MULTIPLE projects OR current role >6 months
+   Include "years" estimate and specific evidence from resume
+2. FAMILIAR skills = mentioned once, side project only, or <6 months exposure
+3. LEARNING skills = explicit "learning", "in progress", "goal" statements ONLY
+
+For preferences — extract from free-text sections (summary, cover letter references), location history, company type patterns:
+- preferred_locations: Where do they live/want to work?
+- avoid_locations: Any explicit location rejections?
+- preferred_company_types: Startup, SaaS, consulting, fintech, etc. (infer from job history)
+- deal_breakers: ONLY explicit statements like "Not interested in consulting body-shops", "Will not work for ...", "Avoid government contracts"
+
+Conservative rule: If uncertain whether a skill is primary or familiar, classify as familiar. False primaries hurt scoring more than false familiars.
+
+Return ONLY valid JSON:
+
+{
+  "schema_version": 2,
+  "name": "Full Name",
+  "primary_role": "Best job title",
+  "role_variants": ["alt titles"],
+  "experience_years": 2.0,
+  "experience_level": "Junior|Junior-Mid|Mid|Senior|Lead",
+  "skills": {
+    "primary": [
+      {"name": "Java", "years": 2, "evidence": "3 projects, current role (2yr)"},
+      {"name": "Spring Boot", "evidence": "2yr current project + 1yr prior", "years": 2}
+    ],
+    "familiar": [
+      {"name": "React", "years": 0.5, "evidence": "1 side project (2024)"},
+      {"name": "Angular", "years": 0.5, "evidence": "mentioned, no projects listed"}
+    ],
+    "learning": ["GraphQL", "Kubernetes"]
+  },
+  "secondary_skills": ["...legacy field for compat..."],
+  "tools": ["IDEs, build tools"],
+  "domain_keywords": ["Industry domains"],
+  "education": "Degree",
+  "location": "Current city",
+  "career_narrative": "2-3 sentence summary",
+  "competitive_advantages": ["..."],
+  "target_companies": ["startup", "SaaS", ...],
+  "preferences": {
+    "preferred_locations": ["Pune", "Bengaluru", "Remote"],
+    "avoid_locations": ["US-only remote"],
+    "preferred_company_types": ["product startup", "SaaS", "fintech"],
+    "deal_breakers": ["no body-shop consulting"]
+  }
+}
+
+Today's date is """ + datetime.now().strftime("%B %Y")
+
+    prompt = f"Analyze this resume and extract tiered skills + preferences:\n\n{resume_text[:4000]}"
+
+    result = _call_groq(prompt, system_prompt, model=SMART_MODEL, max_tokens=2200, temperature=0.1)
+    if not result:
+        return None
+
+    try:
+        json_match = re.search(r"\{[\s\S]*\}", result)
+        if not json_match:
+            return None
+
+        profile = json.loads(json_match.group())
+
+        # Validate schema_version
+        if profile.get("schema_version") != 2:
+            logger.warning("A1: Resume parse didn't return v2 schema, rejecting")
+            return None
+
+        required = ["name", "primary_role", "skills"]
+        for field in required:
+            if field not in profile:
+                return None
+
+        # Validate skills structure
+        if not isinstance(profile.get("skills"), dict):
+            return None
+
+        # Ensure skills has all three tiers
+        for tier in ["primary", "familiar", "learning"]:
+            if tier not in profile["skills"]:
+                profile["skills"][tier] = []
+
+        # Parse legacy fields for backward compatibility
+        for field in ["role_variants", "secondary_skills", "tools", "domain_keywords", "competitive_advantages", "target_companies"]:
+            if field in profile and not isinstance(profile[field], list):
+                profile[field] = []
+
+        # Ensure preferences structure
+        if not isinstance(profile.get("preferences"), dict):
+            profile["preferences"] = {}
+        for pref_field in ["preferred_locations", "avoid_locations", "preferred_company_types", "deal_breakers"]:
+            if pref_field not in profile.get("preferences", {}):
+                profile["preferences"][pref_field] = []
+
+        if "experience_years" in profile:
+            try:
+                profile["experience_years"] = float(profile["experience_years"])
+            except (ValueError, TypeError):
+                profile["experience_years"] = 0.0
+
+        logger.info(f"A1: Resume parse v2 successful: {profile.get('primary_role')}, " +
+                   f"{len(profile.get('skills', {}).get('primary', []))} primary skills, " +
+                   f"{len(profile.get('skills', {}).get('familiar', []))} familiar")
+        return profile
+
+    except json.JSONDecodeError as e:
+        logger.warning(f"A1: Resume parse v2 JSON error: {e}")
+        return None
+
+
 # ============================================================
 # Feature 2: Location-Aware Intelligent Query Generation
 # ============================================================
@@ -178,7 +305,7 @@ def ai_generate_queries(profile, search_locations=None):
     if not is_ai_enabled():
         return []
 
-    system_prompt = """You are a senior technical recruiter in India searching for candidates. 
+    system_prompt = """You are a senior technical recruiter in India searching for candidates.
 Given a developer's profile and their target locations, generate 12-15 highly targeted job search queries.
 
 Rules:
@@ -242,6 +369,157 @@ Generate 12-15 search queries optimized for Indian job portals (Naukri, LinkedIn
         return clean[:15]
 
     except json.JSONDecodeError:
+        return []
+
+
+def ai_generate_source_aware_queries(profile, search_locations=None):
+    """A2: Generate source-specific queries optimized for each platform's syntax.
+
+    Returns dict with per-source query lists:
+    {
+        "linkedin": ["query1", "query2", ...],
+        "naukri": ["query1", "query2", ...],
+        "adzuna": ["query1", "query2", ...],
+        "ats_search": ["query1", "query2"],
+        "generic": ["query1", "query2"]
+    }
+    """
+    if not is_ai_enabled():
+        return {
+            "linkedin": [],
+            "naukri": [],
+            "adzuna": [],
+            "ats_search": [],
+            "generic": []
+        }
+
+    # Get top-performing queries from history to feed into generation
+    top_performers = {}
+    for source in ["linkedin", "naukri", "adzuna", "ats_search", "generic"]:
+        top_performers[source] = get_top_performing_queries(source, limit=3)
+
+    system_prompt = """You generate job search queries optimized for specific platforms.
+Each source has different syntax rules and expectations.
+Your queries must be MEANINGFULLY different (different skills, roles, locations), not near-duplicates.
+
+IMPORTANT: Return ONLY valid JSON in the exact format specified. No explanation, no markdown."""
+
+    skills = _parse_field(profile.get("core_skills", []))
+    role = profile.get("primary_role", "Software Developer")
+    exp = profile.get("experience_years", 0)
+    variants = _parse_field(profile.get("role_variants", []))
+    domain = _parse_field(profile.get("domain_keywords", []))
+
+    locations = search_locations or []
+    if not locations:
+        loc = profile.get("location", "")
+        locations = [loc] if loc else ["Pune"]
+
+    prompt = f"""Developer Profile:
+- Role: {role}
+- Experience: {exp} years
+- Core Skills: {', '.join(skills[:8])}
+- Role Variants: {', '.join(variants[:4])}
+- Domain: {', '.join(domain[:3])}
+- Target Locations: {', '.join(locations)}
+
+Last Week's Best Performers (try variants of these):
+- LinkedIn: {', '.join(top_performers.get('linkedin', []))}
+- Naukri: {', '.join(top_performers.get('naukri', []))}
+- Adzuna: {', '.join(top_performers.get('adzuna', []))}
+
+Generate source-specific queries following these rules:
+
+LINKEDIN (3 queries, MAX 4 words each, NO quotes, prefer job titles):
+Examples: "Java Developer", "Backend Engineer", "Spring Boot Developer"
+BAD: "Java Developer with Spring Boot in Pune" (too long)
+
+NAUKRI (3 queries, location keyword pairs, NO quotes, lowercase):
+Examples: "java spring boot pune", "backend engineer bangalore", "full stack developer remote"
+BAD: '"Java" "Spring Boot"' (Naukri hates quotes)
+
+ADZUNA (3 queries, 2-3 keywords only, NO city names, NO quotes):
+Examples: "java spring boot", "backend microservices", "full stack developer"
+BAD: "java spring boot developer pune" (Adzuna filters city separately)
+
+ATS_SEARCH (2 queries for SearxNG/Yahoo, can use site: operators):
+Examples: "site:naukri.com {role.lower()} {skills[0].lower()}", "site:linkedin.com/jobs {role.lower()}"
+
+GENERIC (2 queries for Jooble/SerpApi, balanced specificity):
+Examples: "java spring boot developer pune", "backend engineer bangalore"
+
+Return ONLY this JSON (no explanation):
+{{
+  "linkedin": ["query1", "query2", "query3"],
+  "naukri": ["query1", "query2", "query3"],
+  "adzuna": ["query1", "query2", "query3"],
+  "ats_search": ["query1", "query2"],
+  "generic": ["query1", "query2"]
+}}"""
+
+    result = _call_groq(prompt, system_prompt, model=FAST_MODEL, max_tokens=1000, temperature=0.4)
+    if not result:
+        return {
+            "linkedin": [],
+            "naukri": [],
+            "adzuna": [],
+            "ats_search": [],
+            "generic": []
+        }
+
+    try:
+        json_match = re.search(r"\{[\s\S]*\}", result)
+        if not json_match:
+            return {
+                "linkedin": [],
+                "naukri": [],
+                "adzuna": [],
+                "ats_search": [],
+                "generic": []
+            }
+
+        queries_by_source = json.loads(json_match.group())
+
+        # Validate and clean each source's queries
+        cleaned = {}
+        for source, queries_list in queries_by_source.items():
+            if not isinstance(queries_list, list):
+                queries_list = []
+            cleaned[source] = [q.strip() for q in queries_list if isinstance(q, str) and 3 < len(q) < 150]
+
+        logger.info(f"A2: Generated source-aware queries: {sum(len(q) for q in cleaned.values())} total queries")
+        return cleaned
+
+    except json.JSONDecodeError as e:
+        logger.warning(f"A2: Failed to parse source-aware queries: {e}")
+        return {
+            "linkedin": [],
+            "naukri": [],
+            "adzuna": [],
+            "ats_search": [],
+            "generic": []
+        }
+
+
+def get_top_performing_queries(source: str, limit: int = 5) -> list:
+    """Get queries that returned >5 jobs in last 7 days for feedback loop."""
+    try:
+        from app.database import get_connection
+
+        with get_connection() as db:
+            rows = db.execute("""
+                SELECT query, AVG(jobs_returned) as avg_yield
+                FROM query_yield_history
+                WHERE source = ? AND refreshed_at > datetime('now', '-7 days')
+                GROUP BY query
+                HAVING avg_yield > 5
+                ORDER BY avg_yield DESC
+                LIMIT ?
+            """, (source, limit)).fetchall()
+
+            return [row["query"] for row in rows] if rows else []
+    except Exception as e:
+        logger.debug(f"Failed to get top queries for {source}: {e}")
         return []
 
 
@@ -333,6 +611,116 @@ Return ONLY valid JSON array:
         time.sleep(2)
 
     logger.info(f"AI scored {len(results)} jobs")
+    return results
+
+
+def analyze_jobs_batch(jobs, profile, batch_size=25):
+    """C1: Analyze jobs with structured reasoning (apply/skip reasons, red flags).
+
+    Returns list of analysis dicts:
+    [{
+        "job_id": 123,
+        "score": 87,
+        "apply_reasons": ["reason1", "reason2"],
+        "skip_reasons": ["caution1"],
+        "fit_summary": "...",
+        "red_flags": ["stale_posting", "seniority_mismatch"]
+    }, ...]
+    """
+    if not is_ai_enabled() or not jobs:
+        return []
+
+    skills = _parse_field(profile.get("core_skills", []))
+    role = profile.get("primary_role", "Software Developer")
+    exp = profile.get("experience_years", 0)
+    location = profile.get("location", "")
+    narrative = profile.get("career_narrative", "")
+    advantages = _parse_field(profile.get("competitive_advantages", []))
+
+    profile_summary = f"""Candidate: {role} | {exp}yr exp | {location}
+Skills: {', '.join(skills[:10])}
+Strengths: {', '.join(advantages[:3])}"""
+
+    system_prompt = f"""You are a career advisor analyzing job opportunities for this developer:
+
+{profile_summary}
+
+For each job, return structured JSON:
+{{
+  "job_id": int,
+  "score": 0-100 (overall fit),
+  "apply_reasons": ["reason1 (max 12 words)", ...],      // 2-3 bullet points
+  "skip_reasons": ["caution1 (max 12 words)", ...],      // 1-2 cautions
+  "fit_summary": "One sentence verdict (max 20 words)",
+  "red_flags": ["seniority_mismatch", "stale_posting", "underpaid", "generic_jd", ...]
+}}
+
+Red flag types:
+- seniority_mismatch: Job level way above/below candidate's experience
+- stale_posting: Posted >30 days ago
+- underpaid: Salary below market for the role
+- generic_jd: Vague job description, low signal
+- experience_too_high: Asks for 10+ years when candidate has 2-3
+- location_mismatch: Remote-only or location explicitly not matching
+- stack_mismatch: Primary tech stack completely different from candidate
+- body_shop: Consulting/staffing firm (if candidate avoids these)
+
+Be honest. If a job is mediocre, say so. Don't pad with generic praise."""
+
+    results = []
+
+    for i in range(0, len(jobs), batch_size):
+        batch = jobs[i:i + batch_size]
+
+        job_jsons = []
+        for job in batch:
+            job_compact = {
+                "id": job['id'],
+                "title": job['title'],
+                "company": job.get('company', ''),
+                "location": job.get('location', ''),
+                "description": job.get('description_snippet', '')[:400],
+                "posted_date": job.get('posted_date', ''),
+            }
+            job_jsons.append(job_compact)
+
+        prompt = f"Analyze these {len(batch)} jobs:\n\n{json.dumps(job_jsons, indent=2)}"
+
+        result = _call_groq(prompt, system_prompt, model=FAST_MODEL, max_tokens=2000, temperature=0.2)
+        if not result:
+            continue
+
+        try:
+            json_match = re.search(r"\[[\s\S]*\]", result)
+            if not json_match:
+                continue
+
+            analyses = json.loads(json_match.group())
+            if not isinstance(analyses, list):
+                continue
+
+            for entry in analyses:
+                if not isinstance(entry, dict):
+                    continue
+                job_id = entry.get("job_id")
+                if job_id is not None:
+                    analysis = {
+                        "job_id": int(job_id),
+                        "score": max(0, min(100, int(entry.get("score", 0)))),
+                        "apply_reasons": entry.get("apply_reasons", []) if isinstance(entry.get("apply_reasons"), list) else [],
+                        "skip_reasons": entry.get("skip_reasons", []) if isinstance(entry.get("skip_reasons"), list) else [],
+                        "fit_summary": str(entry.get("fit_summary", ""))[:120],
+                        "red_flags": entry.get("red_flags", []) if isinstance(entry.get("red_flags"), list) else [],
+                    }
+                    results.append(analysis)
+
+        except (json.JSONDecodeError, ValueError, TypeError):
+            logger.debug(f"C1: Failed to parse batch of {len(batch)} jobs")
+            continue
+
+        time.sleep(2)
+
+    logger.info(f"C1: Analyzed {len(results)} jobs with structured reasoning")
     return results
 
 

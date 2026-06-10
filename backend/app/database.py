@@ -36,6 +36,10 @@ CREATE TABLE IF NOT EXISTS profiles (
     education TEXT DEFAULT '',
     location TEXT DEFAULT '',
     resume_text TEXT DEFAULT '',
+    schema_version INTEGER DEFAULT 1,
+    skills_tiered TEXT DEFAULT '',
+    deal_breakers TEXT DEFAULT '[]',
+    preferences_explicit TEXT DEFAULT '{}',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
@@ -179,6 +183,30 @@ CREATE TABLE IF NOT EXISTS refresh_jobs (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- A2: Query yield tracking (which queries return jobs per source)
+CREATE TABLE IF NOT EXISTS query_yield_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    query TEXT NOT NULL,
+    source TEXT NOT NULL,
+    location TEXT NOT NULL,
+    jobs_returned INTEGER NOT NULL DEFAULT 0,
+    refreshed_at TIMESTAMP NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(query, source, location, refreshed_at)
+);
+
+-- C1: Job AI analysis with structured reasoning (apply/skip reasons, red flags)
+CREATE TABLE IF NOT EXISTS job_ai_analysis (
+    job_id INTEGER PRIMARY KEY,
+    ai_score INTEGER NOT NULL,
+    apply_reasons TEXT DEFAULT '[]',
+    skip_reasons TEXT DEFAULT '[]',
+    fit_summary TEXT DEFAULT '',
+    red_flags TEXT DEFAULT '[]',
+    analyzed_at TIMESTAMP NOT NULL DEFAULT (datetime('now')),
+    model_used TEXT NOT NULL,
+    FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
+);
+
 -- Indexes for common queries
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
 CREATE INDEX IF NOT EXISTS idx_jobs_match_score ON jobs(match_score DESC);
@@ -192,6 +220,9 @@ CREATE INDEX IF NOT EXISTS idx_health_log_source_time ON source_health_log(sourc
 CREATE INDEX IF NOT EXISTS idx_refresh_jobs_started ON refresh_jobs(started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_company_registry_ats ON company_registry(ats);
 CREATE INDEX IF NOT EXISTS idx_company_registry_discovered ON company_registry(discovered_at DESC);
+CREATE INDEX IF NOT EXISTS idx_yield_query_source ON query_yield_history(query, source);
+CREATE INDEX IF NOT EXISTS idx_yield_refreshed ON query_yield_history(refreshed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_analysis_analyzed ON job_ai_analysis(analyzed_at DESC);
 """
 
 # Default company career page registry (Indian IT + product companies)
