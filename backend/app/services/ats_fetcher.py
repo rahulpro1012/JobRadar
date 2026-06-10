@@ -14,10 +14,6 @@ from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
-# Import hardcoded company lists from other ATS fetchers
-# (used in UNION pattern with DB discoveries)
-from app.services.workable_fetcher import WORKABLE_COMPANIES
-from app.services.smartrecruiters_fetcher import SMARTRECRUITERS_COMPANIES
 
 
 # ============================================================
@@ -115,13 +111,22 @@ def _load_companies_for_ats(ats_name: str) -> dict:
     Returns:
         Dict of {company_name: slug, ...} combining hardcoded + DB discoveries
     """
+    # Move these imports inside the function to break the circular dependency.
+    # workable_fetcher and smartrecruiters_fetcher import ProfileFilter from here at top-level.
+    from app.services.workable_fetcher import WORKABLE_COMPANIES
+    from app.services.smartrecruiters_fetcher import SMARTRECRUITERS_COMPANIES
+
+    # Convert list constants to dicts for UNION consistency {Title: slug}
+    workable_dict = {slug.title(): slug for slug in WORKABLE_COMPANIES}
+    smartrecruiters_dict = {slug.title(): slug for slug in SMARTRECRUITERS_COMPANIES}
+
     # Hardcoded baseline from each fetcher file
     HARDCODED_COMPANIES = {
         "greenhouse": GREENHOUSE_COMPANIES,
         "lever": LEVER_COMPANIES,
         "ashby": ASHBY_COMPANIES,
-        "workable": WORKABLE_COMPANIES,
-        "smartrecruiters": SMARTRECRUITERS_COMPANIES,
+        "workable": workable_dict,
+        "smartrecruiters": smartrecruiters_dict,
     }
 
     hardcoded = HARDCODED_COMPANIES.get(ats_name, {})

@@ -13,7 +13,7 @@ import json
 import time
 import logging
 import requests
-from app.services.ats_fetcher import ProfileFilter
+from app.services.ats_fetcher import ProfileFilter, _load_companies_for_ats
 from app.services.source_health import is_healthy, record_success, record_failure
 
 logger = logging.getLogger(__name__)
@@ -53,8 +53,11 @@ def fetch_smartrecruiters_jobs(profile: dict, delay: float = 0.3) -> list:
     pf = ProfileFilter(profile)
     all_jobs = []
     skipped = 0
+    
+    # Load dynamic company list (hardcoded + discovered)
+    companies = _load_companies_for_ats(SOURCE_NAME)
 
-    for company_id in SMARTRECRUITERS_COMPANIES:
+    for company_display_name, company_id in companies.items():
         try:
             url = f"https://api.smartrecruiters.com/v1/companies/{company_id}/postings"
             resp = requests.get(url, params={"limit": 100}, timeout=10, verify=False)
@@ -95,7 +98,7 @@ def fetch_smartrecruiters_jobs(profile: dict, delay: float = 0.3) -> list:
 
             all_jobs.append({
                 "title": title[:150],
-                "company": company_id.title()[:100],
+                "company": company_display_name[:100],
                 "location": location_str[:100],
                 "source_url": job_url,
                 "source_domain": "jobs.smartrecruiters.com",

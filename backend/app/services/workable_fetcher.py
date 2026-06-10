@@ -11,7 +11,7 @@ import json
 import time
 import logging
 import requests
-from app.services.ats_fetcher import ProfileFilter
+from app.services.ats_fetcher import ProfileFilter, _load_companies_for_ats
 from app.services.source_health import is_healthy, record_success, record_failure
 
 logger = logging.getLogger(__name__)
@@ -53,8 +53,11 @@ def fetch_workable_jobs(profile: dict, delay: float = 0.3) -> list:
     pf = ProfileFilter(profile)
     all_jobs = []
     skipped_404 = 0
+    
+    # Load dynamic company list (hardcoded + discovered)
+    companies = _load_companies_for_ats(SOURCE_NAME)
 
-    for slug in WORKABLE_COMPANIES:
+    for company_display_name, slug in companies.items():
         try:
             url = f"https://apply.workable.com/api/v1/widget/accounts/{slug}?details=true"
             resp = requests.get(url, timeout=10, verify=False)
