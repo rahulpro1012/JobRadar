@@ -614,7 +614,52 @@ Return ONLY valid JSON array:
     return results
 
 
-def analyze_jobs_batch(jobs, profile, batch_size=25):
+def _clean_groq_json(text: str) -> str:
+    """Strip common Groq response wrappers (markdown, preamble, trailing text)."""
+    text = text.strip()
+
+    # Strip markdown fence if present
+    if text.startswith("```"):
+        # Remove opening fence (```json or ```)
+        text = text.split("\n", 1)[1] if "\n" in text else text[3:]
+        # Remove closing fence
+        if text.endswith("```"):
+            text = text[:-3].strip()
+        elif "```" in text:
+            text = text.rsplit("```", 1)[0].strip()
+
+    # If response starts with non-JSON text, find first { or [
+    if text and text[0] not in "{[":
+        # Look for first occurrence of valid JSON start
+        for i, ch in enumerate(text):
+            if ch in "{[":
+                text = text[i:]
+                break
+
+    # Find matching closing brace/bracket if response has trailing text
+    if text.startswith("["):
+        depth = 0
+        for i, ch in enumerate(text):
+            if ch == "[": depth += 1
+            elif ch == "]":
+                depth -= 1
+                if depth == 0:
+                    text = text[:i+1]
+                    break
+    elif text.startswith("{"):
+        depth = 0
+        for i, ch in enumerate(text):
+            if ch == "{": depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    text = text[:i+1]
+                    break
+
+    return text
+
+
+def analyze_jobs_batch(jobs, profile, batch_size=15):
     """C1: Analyze jobs with structured reasoning (apply/skip reasons, red flags).
 
     Returns list of analysis dicts:
@@ -645,27 +690,22 @@ Strengths: {', '.join(advantages[:3])}"""
 
 {profile_summary}
 
-For each job, return structured JSON:
-{{
-  "job_id": int,
-  "score": 0-100 (overall fit),
-  "apply_reasons": ["reason1 (max 12 words)", ...],      // 2-3 bullet points
-  "skip_reasons": ["caution1 (max 12 words)", ...],      // 1-2 cautions
-  "fit_summary": "One sentence verdict (max 20 words)",
-  "red_flags": ["seniority_mismatch", "stale_posting", "underpaid", "generic_jd", ...]
-}}
+For each job, return ONLY valid JSON array with this exact structure. Never include explanatory text before or after the JSON. Never wrap in markdown code fences.
 
-Red flag types:
-- seniority_mismatch: Job level way above/below candidate's experience
-- stale_posting: Posted >30 days ago
-- underpaid: Salary below market for the role
-- generic_jd: Vague job description, low signal
-- experience_too_high: Asks for 10+ years when candidate has 2-3
-- location_mismatch: Remote-only or location explicitly not matching
-- stack_mismatch: Primary tech stack completely different from candidate
-- body_shop: Consulting/staffing firm (if candidate avoids these)
+Return ONLY:
+[
+  {{
+    "job_id": int,
+    "score": 0-100 (overall fit),
+    "apply_reasons": ["reason1 (max 12 words)", ...],
+    "skip_reasons": ["caution1 (max 12 words)", ...],
+    "fit_summary": "One sentence verdict (max 20 words)",
+    "red_flags": ["seniority_mismatch", "stale_posting", ...]
+  }},
+  ...
+]
 
-Be honest. If a job is mediocre, say so. Don't pad with generic praise."""
+Red flag types: seniority_mismatch, stale_posting, underpaid, generic_jd, experience_too_high, location_mismatch, stack_mismatch, body_shop"""
 
     results = []
 
@@ -686,21 +726,43 @@ Be honest. If a job is mediocre, say so. Don't pad with generic praise."""
 
         prompt = f"Analyze these {len(batch)} jobs:\n\n{json.dumps(job_jsons, indent=2)}"
 
-        result = _call_groq(prompt, system_prompt, model=FAST_MODEL, max_tokens=2000, temperature=0.2)
+        result = _call_groq(prompt, system_prompt, model=FAST_MODEL, max_tokens=4000, temperature=0.1)
         if not result:
+            logger.debug(f"C1: No response from Groq for batch of {len(batch)} jobs")
             continue
 
         try:
-            json_match = re.search(r"\[[\s\S]*\]", result)
-            if not json_match:
+            # ===== DIAGNOSTIC LOGGING =====
+            logger.debug(f"C1: Raw response length: {len(result)} chars")
+            logger.debug(f"C1: Response first 300: {result[:300]}")
+            logger.debug(f"C1: Response last 200: {result[-200:]}")
+
+            # ===== ROBUST PARSING =====
+            cleaned = _clean_groq_json(result)
+
+            try:
+                analyses = json.loads(cleaned)
+            except json.JSONDecodeError as e:
+                # Show EXACTLY where parse failed
+                logger.error(f"C1: JSON parse failed at position {e.pos}: {e.msg}")
+                logger.error(f"C1: Around error: ...{cleaned[max(0, e.pos-80):e.pos+80]}...")
+                # Save full response for debugging
+                try:
+                    import tempfile
+                    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+                        f.write(result)
+                        logger.error(f"C1: Full response saved to {f.name}")
+                except Exception:
+                    pass
                 continue
 
-            analyses = json.loads(json_match.group())
             if not isinstance(analyses, list):
+                logger.warning(f"C1: Response is not a list, got {type(analyses)}")
                 continue
 
             for entry in analyses:
                 if not isinstance(entry, dict):
+                    logger.debug(f"C1: Skipping non-dict entry: {entry}")
                     continue
                 job_id = entry.get("job_id")
                 if job_id is not None:
@@ -714,8 +776,10 @@ Be honest. If a job is mediocre, say so. Don't pad with generic praise."""
                     }
                     results.append(analysis)
 
-        except (json.JSONDecodeError, ValueError, TypeError):
-            logger.debug(f"C1: Failed to parse batch of {len(batch)} jobs")
+            logger.info(f"C1: Successfully parsed {len([a for a in analyses if isinstance(a, dict) and 'job_id' in a])} job analyses from batch")
+
+        except (json.JSONDecodeError, ValueError, TypeError) as e:
+            logger.error(f"C1: Exception parsing batch of {len(batch)} jobs: {e}")
             continue
 
         time.sleep(2)

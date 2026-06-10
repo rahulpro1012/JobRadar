@@ -16,12 +16,17 @@ Usage:
     for job in search_results:
         if job["source"] in ("search", "searxng", "linkedin_guest"):
             discover_company(job["company"])  # Fire-and-forget
+
+Parallelization (Patch 2):
+    # Call discover_companies_batch for ~25 candidates at refresh time
+    results = discover_companies_batch(candidate_names, max_workers=8)
 """
 import logging
 import requests
 import time
 from datetime import datetime
 from urllib.parse import urlparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from app.database import get_connection
 
 logger = logging.getLogger(__name__)
@@ -170,6 +175,54 @@ def discover_company_batch(job_list: list, batch_delay: float = 0.1) -> int:
             time.sleep(batch_delay)
 
     return discovered
+
+
+def discover_companies_batch_parallel(candidate_names: list, max_workers: int = 8) -> dict:
+    """Patch 2: Probe many candidate company names in parallel.
+
+    Each candidate is probed across all 4 ATSes (Greenhouse, Lever, Ashby, Workable).
+    Returns: {"discovered": int, "rejected": int, "persisted": list[str]}
+
+    Args:
+        candidate_names: List of company names to probe.
+        max_workers: Number of parallel probing threads (default 8).
+    """
+    if not candidate_names:
+        return {"discovered": 0, "rejected": 0, "persisted": []}
+
+    # Filter garbage names BEFORE spending HTTP calls
+    valid = [n for n in candidate_names if _is_valid_company_name(n)]
+    rejected = len(candidate_names) - len(valid)
+    if rejected:
+        logger.debug(f"[discovery] Pre-filter rejected {rejected} garbage names")
+
+    if not valid:
+        return {"discovered": 0, "rejected": rejected, "persisted": []}
+
+    logger.info(f"[discovery] Probing {len(valid)} candidates with {max_workers} parallel workers")
+
+    persisted = []
+    with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="discovery") as executor:
+        future_to_name = {
+            executor.submit(discover_company, name): name
+            for name in valid
+        }
+
+        for future in as_completed(future_to_name):
+            name = future_to_name[future]
+            try:
+                result = future.result(timeout=15)
+                if result:
+                    persisted.append(result)
+            except Exception as e:
+                logger.debug(f"[discovery] {name} failed: {e}")
+
+    logger.info(f"[discovery] Found {len(persisted)} new companies (out of {len(valid)} probed)")
+    return {
+        "discovered": len(persisted),
+        "rejected": rejected,
+        "persisted": persisted,
+    }
 
 
 def get_discovered_companies(limit: int = 50) -> list:

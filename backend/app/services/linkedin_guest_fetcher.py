@@ -11,16 +11,25 @@ Max pages: 2 per query (50 jobs max) to minimize detection risk
 Circuit breaker: Automatic 1-hour cooldown after 3 failures
 
 Risk: Medium. LinkedIn actively blocks scrapers. Use with UA rotation + delays.
+
+Patch 3: Parallelized query fetching with global rate limiter.
 """
 import json
 import time
 import random
 import logging
 import requests
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from bs4 import BeautifulSoup
 from app.services.ats_fetcher import ProfileFilter
 from app.services.source_health import is_healthy, record_success, record_failure
 from app.services.search_cache import cache_get, cache_set
+
+# Patch 3: Global rate limiter to enforce minimum gap between ALL LinkedIn requests
+_linkedin_last_request = {"timestamp": 0.0}
+_linkedin_lock = threading.Lock()
+MIN_GAP_BETWEEN_REQUESTS = 1.5  # seconds — global floor regardless of thread
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +59,19 @@ WORK_TYPES = {
     "onsite": 1,
     "hybrid": 3,
 }
+
+
+def _rate_limited_get(url, params, headers, timeout=15):
+    """Patch 3: All LinkedIn requests go through this. Enforces min 1.5s gap globally."""
+    with _linkedin_lock:
+        now = time.time()
+        elapsed = now - _linkedin_last_request["timestamp"]
+        if elapsed < MIN_GAP_BETWEEN_REQUESTS:
+            sleep_for = MIN_GAP_BETWEEN_REQUESTS - elapsed
+            time.sleep(sleep_for)
+        _linkedin_last_request["timestamp"] = time.time()
+
+    return requests.get(url, params=params, headers=headers, timeout=timeout, verify=False)
 
 
 def _fetch_linkedin_variant(
@@ -97,13 +119,8 @@ def _fetch_linkedin_variant(
                 "Referer": "https://www.linkedin.com/jobs/",
             }
 
-            resp = requests.get(
-                ENDPOINT,
-                params=params,
-                headers=headers,
-                timeout=15,
-                verify=False,
-            )
+            # Patch 3: Use rate-limited request
+            resp = _rate_limited_get(ENDPOINT, params, headers, timeout=15)
 
             # Rate limit detection
             if resp.status_code == 429:
@@ -176,6 +193,28 @@ def _fetch_linkedin_variant(
     return variant_jobs
 
 
+def _fetch_query_both_variants(query: str, location: str, max_pages: int, pf: ProfileFilter) -> list:
+    """Fetch both variants (remote + local) for a single query. Returns deduplicated jobs."""
+    # Strip quotes and filler, truncate to 5 words
+    query = query.replace('"', '').replace("'", "")
+    query = " ".join(query.split()[:5])
+
+    # Fetch both variants
+    remote_jobs = _fetch_linkedin_variant(query, location, remote_only=True, max_pages=max_pages, pf=pf)
+    local_jobs = _fetch_linkedin_variant(query, location, remote_only=False, max_pages=max_pages, pf=pf)
+
+    # Dedupe within this query
+    seen = set()
+    jobs = []
+    for job in remote_jobs + local_jobs:
+        url = job["source_url"]
+        if url not in seen:
+            seen.add(url)
+            jobs.append(job)
+
+    return jobs
+
+
 def fetch_linkedin_guest_jobs(
     profile: dict,
     queries: list[str] = None,
@@ -186,7 +225,8 @@ def fetch_linkedin_guest_jobs(
     """
     Fetch jobs from LinkedIn jobs-guest endpoint with strict rate limiting.
 
-    Issue 3: Runs BOTH remote-only and location-only variants per query.
+    Patch 3: Runs queries in parallel (max 3 lanes) with global rate limiter.
+    Each query runs BOTH remote-only and location-only variants.
 
     Args:
         profile: Parsed user profile dict.
@@ -200,6 +240,7 @@ def fetch_linkedin_guest_jobs(
 
     Note:
         Circuit breaker opens after 3 failures. Respects source_health module.
+        Patch 3: Parallelizes across queries (max 3 lanes) but keeps pagination sequential.
     """
     if not is_healthy(SOURCE_NAME):
         logger.info(f"[{SOURCE_NAME}] circuit open — skipping this refresh")
@@ -212,31 +253,36 @@ def fetch_linkedin_guest_jobs(
             f"{profile.get('primary_role', 'Software Developer')} Remote",
         ]
 
+    # Patch 3: Cap to 3 queries to limit parallel load on LinkedIn
+    queries = queries[:3]
+
     pf = ProfileFilter(profile)
     all_jobs = []
-    seen_urls = set()  # Dedupe across variants
+    seen_urls = set()  # Global dedupe
 
-    for query in queries:
-        # Strip quotes and filler, truncate to 5 words
-        query = query.replace('"', '').replace("'", "")
-        query = " ".join(query.split()[:5])
+    logger.info(f"[{SOURCE_NAME}] Fetching {len(queries)} queries in parallel")
 
-        # Issue 3: Run BOTH variants
-        # Variant 1: Remote-only (f_WT=2, location=Worldwide)
-        remote_jobs = _fetch_linkedin_variant(query, location, remote_only=True, max_pages=max_pages, pf=pf)
+    # Patch 3: Parallelize queries (max 3 lanes)
+    with ThreadPoolExecutor(max_workers=3, thread_name_prefix="linkedin") as executor:
+        future_to_query = {
+            executor.submit(_fetch_query_both_variants, q, location, max_pages, pf): q
+            for q in queries
+        }
 
-        # Variant 2: Location-only (no f_WT, location=Pune/India)
-        local_jobs = _fetch_linkedin_variant(query, location, remote_only=False, max_pages=max_pages, pf=pf)
+        for future in as_completed(future_to_query):
+            query = future_to_query[future]
+            try:
+                jobs = future.result(timeout=45)
+                logger.debug(f"[{SOURCE_NAME}] '{query}': {len(jobs)} jobs")
 
-        # Dedupe and combine
-        for job in remote_jobs + local_jobs:
-            url = job["source_url"]
-            if url not in seen_urls:
-                seen_urls.add(url)
-                all_jobs.append(job)
-
-        # Delay between queries
-        time.sleep(random.uniform(delay_range[0], delay_range[1]))
+                # Global dedupe across all queries
+                for job in jobs:
+                    url = job["source_url"]
+                    if url not in seen_urls:
+                        seen_urls.add(url)
+                        all_jobs.append(job)
+            except Exception as e:
+                logger.warning(f"[{SOURCE_NAME}] '{query}' failed: {e}")
 
     # Record success
     if all_jobs:
@@ -244,5 +290,5 @@ def fetch_linkedin_guest_jobs(
     else:
         record_failure(SOURCE_NAME, "no jobs returned")
 
-    logger.info(f"[{SOURCE_NAME}] {len(all_jobs)} jobs from {len(queries)} queries")
+    logger.info(f"[{SOURCE_NAME}] {len(all_jobs)} jobs from {len(queries)} queries (parallel)")
     return all_jobs
