@@ -221,7 +221,8 @@ def refresh_jobs():
                 )
                 if top_jobs:
                     # C1: Get structured analysis with reasoning
-                    analyses = analyze_jobs_batch(top_jobs, profile, batch_size=25)
+                    # TPM fix: reduce batch size from 25 to 10 to stay under Groq's 6000 TPM limit
+                    analyses = analyze_jobs_batch(top_jobs, profile, batch_size=10)
                     if analyses:
                         with get_connection() as conn:
                             for analysis in analyses:

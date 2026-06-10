@@ -708,9 +708,12 @@ Return ONLY:
 Red flag types: seniority_mismatch, stale_posting, underpaid, generic_jd, experience_too_high, location_mismatch, stack_mismatch, body_shop"""
 
     results = []
+    total_batches = (len(jobs) + batch_size - 1) // batch_size
 
     for i in range(0, len(jobs), batch_size):
         batch = jobs[i:i + batch_size]
+        batch_num = (i // batch_size) + 1
+        logger.info(f"C1: Analyzing batch {batch_num}/{total_batches} ({len(batch)} jobs)")
 
         job_jsons = []
         for job in batch:
@@ -782,9 +785,11 @@ Red flag types: seniority_mismatch, stale_posting, underpaid, generic_jd, experi
             logger.error(f"C1: Exception parsing batch of {len(batch)} jobs: {e}")
             continue
 
-        time.sleep(2)
+        # Pause between batches to stay under TPM limit (skip after last batch)
+        if i + batch_size < len(jobs):
+            time.sleep(2.0)
 
-    logger.info(f"C1: Analyzed {len(results)} jobs with structured reasoning")
+    logger.info(f"C1: Total {len(results)} jobs analyzed across {total_batches} batches")
     return results
 
 
