@@ -56,6 +56,29 @@ def get_job(job_id):
     return jsonify(job)
 
 
+@jobs_bp.route("/jobs/<int:job_id>/analysis", methods=["GET"])
+def get_job_analysis(job_id):
+    """C1: Get structured AI analysis with reasoning for a job."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM job_ai_analysis WHERE job_id = ?", (job_id,)
+        ).fetchone()
+
+    if not row:
+        return jsonify({"analysis": None}), 200
+
+    analysis = {
+        "job_id": row["job_id"],
+        "score": row["ai_score"],
+        "apply_reasons": json.loads(row["apply_reasons"] or "[]"),
+        "skip_reasons": json.loads(row["skip_reasons"] or "[]"),
+        "fit_summary": row["fit_summary"],
+        "red_flags": json.loads(row["red_flags"] or "[]"),
+        "analyzed_at": row["analyzed_at"],
+    }
+    return jsonify({"analysis": analysis}), 200
+
+
 @jobs_bp.route("/jobs/<int:job_id>/status", methods=["PATCH"])
 def update_job_status(job_id):
     data = request.get_json()
@@ -185,36 +208,68 @@ def refresh_jobs():
         # ── Step 4: Rule-based scoring ──
         scored = score_all_jobs(profile)
 
-        # ── Step 5: AI re-scores top jobs ──
+        # ── Step 5: AI re-scores top jobs + C1: Structured analysis ──
         ai_scored = 0
         try:
-            from app.services.ai_agent import ai_score_jobs, is_ai_enabled
+            from app.services.ai_agent import analyze_jobs_batch, is_ai_enabled
             if is_ai_enabled():
                 top_jobs = execute_query(
                     """SELECT id, title, company, location, description_snippet, match_score
                        FROM jobs WHERE status = 'new'
-                       ORDER BY match_score DESC LIMIT 16""",
+                       ORDER BY match_score DESC LIMIT 25""",
                     fetch_all=True
                 )
                 if top_jobs:
-                    ai_results = ai_score_jobs(top_jobs, profile)
-                    if ai_results:
+                    # C1: Get structured analysis with reasoning
+                    analyses = analyze_jobs_batch(top_jobs, profile, batch_size=25)
+                    if analyses:
                         with get_connection() as conn:
-                            for job_id, ai_data in ai_results.items():
+                            for analysis in analyses:
+                                job_id = analysis["job_id"]
+                                ai_score = analysis["score"]
+
+                                # Get base rule-based score
                                 base = conn.execute(
                                     "SELECT match_score FROM jobs WHERE id = ?", (job_id,)
                                 ).fetchone()
                                 if base:
-                                    blended = int(base[0] * 0.6 + ai_data["ai_score"] * 0.4)
+                                    blended = int(base[0] * 0.6 + ai_score * 0.4)
+
+                                    # Update jobs table with blended score
                                     conn.execute(
                                         """UPDATE jobs SET adjusted_score = ?, ai_score = ?, ai_reason = ?
                                            WHERE id = ?""",
-                                        (blended, ai_data["ai_score"], ai_data["ai_reason"], job_id)
+                                        (blended, ai_score, analysis["fit_summary"], job_id)
                                     )
+
+                                    # C1: Store structured analysis
+                                    try:
+                                        conn.execute(
+                                            """INSERT INTO job_ai_analysis
+                                               (job_id, ai_score, apply_reasons, skip_reasons, fit_summary, red_flags, model_used)
+                                               VALUES (?, ?, ?, ?, ?, ?, ?)
+                                               ON CONFLICT(job_id) DO UPDATE SET
+                                               ai_score = excluded.ai_score,
+                                               apply_reasons = excluded.apply_reasons,
+                                               skip_reasons = excluded.skip_reasons,
+                                               fit_summary = excluded.fit_summary,
+                                               red_flags = excluded.red_flags,
+                                               analyzed_at = datetime('now')""",
+                                            (job_id, ai_score,
+                                             json.dumps(analysis.get("apply_reasons", [])),
+                                             json.dumps(analysis.get("skip_reasons", [])),
+                                             analysis["fit_summary"],
+                                             json.dumps(analysis.get("red_flags", [])),
+                                             "llama-3.1-8b-instant")
+                                        )
+                                    except Exception as e:
+                                        logger.debug(f"C1: Failed to store analysis for job {job_id}: {e}")
+
                             conn.commit()
-                        ai_scored = len(ai_results)
+                        ai_scored = len(analyses)
+                        logger.info(f"C1: Analyzed {ai_scored} jobs with structured reasoning")
         except Exception as e:
-            logger.info(f"AI scoring skipped: {e}")
+            logger.info(f"AI analysis skipped: {e}")
 
         return jsonify({
             "message": f"Found {new_count} new jobs",

@@ -76,8 +76,20 @@ def fetch_all_jobs(profile, config):
     Expected time: ~45-60 sec (bounded by slowest layer, typically ATS at ~50s).
 
     Previously: ~3 min 10 sec (sequential execution)
+
+    A2: Uses source-aware queries if AI enabled, falls back to legacy query_engine
     """
-    # Get AI-generated queries if available
+    # A2: Try source-aware query generation first
+    queries_by_source = None
+    try:
+        from app.services.ai_agent import ai_generate_source_aware_queries, is_ai_enabled
+        if is_ai_enabled():
+            queries_by_source = ai_generate_source_aware_queries(profile, search_locations=_get_search_locations(profile))
+            logger.info(f"A2: Generated source-aware queries: {sum(len(q) for q in queries_by_source.values())} total")
+    except Exception as e:
+        logger.debug(f"A2: Failed to generate source-aware queries: {e}")
+
+    # Fallback: legacy query engine if A2 not available
     ai_queries = config.get("_ai_queries", [])
     queries = generate_queries(profile, ai_queries=ai_queries)
 
@@ -139,14 +151,21 @@ def fetch_all_jobs(profile, config):
     searxng_url = config.get("SEARXNG_URL", "")
     if searxng_url:
         from app.services.search_fetcher import fetch_from_searxng
-        portal_queries = _build_portal_queries(profile, queries, search_locations)
-        layers.append(("SearxNG (Naukri + LinkedIn)", fetch_from_searxng, {"queries": portal_queries, "delay": 1.5}))
+        # A2: Use ATS-specific queries for SearxNG
+        ats_search_queries = queries_by_source.get("ats_search", []) if queries_by_source else []
+        if not ats_search_queries:
+            ats_search_queries = _build_portal_queries(profile, queries, search_locations)
+        layers.append(("SearxNG (Naukri + LinkedIn)", fetch_from_searxng, {"queries": ats_search_queries, "delay": 1.5}))
     else:
         logger.debug("Layer 7: SearxNG disabled (set SEARXNG_URL in .env to enable)")
 
     # ── Layer 8: Yahoo ──
     from app.services.search_fetcher import fetch_from_yahoo
-    yahoo_q = _build_portal_queries(profile, queries, search_locations)[:4]
+    # A2: Use ATS-specific queries for Yahoo
+    yahoo_qs = queries_by_source.get("ats_search", []) if queries_by_source else []
+    if not yahoo_qs:
+        yahoo_qs = _build_portal_queries(profile, queries, search_locations)
+    yahoo_q = yahoo_qs[:4]
     layers.append(("Yahoo", fetch_from_yahoo, {"queries": yahoo_q, "delay": 1.5}))
 
     # ❌ DISABLED 2026-06-08: Not using Bing API (no key configured, low priority)
@@ -184,12 +203,19 @@ def fetch_all_jobs(profile, config):
     adzuna_id = config.get("ADZUNA_APP_ID", "")
     if adzuna_id:
         from app.services.adzuna_fetcher import fetch_adzuna_jobs
-        layers.append(("Adzuna", fetch_adzuna_jobs, {"profile": profile, "queries": queries, "config": config, "delay": scrape_delay}))
+        # A2: Use Adzuna-specific queries (no city names, no quotes)
+        adzuna_qs = queries_by_source.get("adzuna", []) if queries_by_source else []
+        if not adzuna_qs:
+            adzuna_qs = queries
+        layers.append(("Adzuna", fetch_adzuna_jobs, {"profile": profile, "queries": adzuna_qs, "config": config, "delay": scrape_delay}))
 
     # ── Layer 18: LinkedIn jobs-guest ──
     from app.services.linkedin_guest_fetcher import fetch_linkedin_guest_jobs
-    linkedin_queries = [q["query"] if isinstance(q, dict) else q for q in queries]
-    layers.append(("LinkedIn Guest", fetch_linkedin_guest_jobs, {"profile": profile, "queries": linkedin_queries, "location": "Pune", "max_pages": 2}))
+    # A2: Use LinkedIn-specific queries (short, max 4 words, no quotes)
+    linkedin_qs = queries_by_source.get("linkedin", []) if queries_by_source else []
+    if not linkedin_qs:
+        linkedin_qs = [q["query"] if isinstance(q, dict) else q for q in queries]
+    layers.append(("LinkedIn Guest", fetch_linkedin_guest_jobs, {"profile": profile, "queries": linkedin_qs, "location": "Pune", "max_pages": 2}))
 
     # ❌ DISABLED 2026-06-08: Naukri direct API blocks our requests (HTTP 406).
     # Circuit breaker has been perma-open for 4 sessions. Header variations tried: none work.
