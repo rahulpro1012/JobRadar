@@ -59,23 +59,15 @@ GREENHOUSE_COMPANIES = {
 }
 
 LEVER_COMPANIES = {
+    # Issue 4: Removed 12 perma-404 companies (consistently 404 across 6+ sessions):
+    # Removed: twilio, shopify, workato, hasura, postman, browserstack, druva,
+    #          phonepe, groww, upstox, sliceit, licious
+    # Reasoning: Most use different ATSes or in-house portals. Postman moved to Greenhouse.
     "Netflix": "netflix",
     "Atlassian": "atlassian",
-    "Twilio": "twilio",
     "Spotify": "spotify",
-    "Shopify": "shopify",
     "Cloudinary": "cloudinary",
-    "Workato": "workato",
-    "Hasura": "hasura",
-    "Postman": "postman",
-    "BrowserStack": "browserstack",
-    "Druva": "druva",
     "Freshworks": "freshworks",
-    "PhonePe": "phonepe",
-    "Groww": "groww",
-    "Upstox": "upstox",
-    "Slice": "sliceit",
-    "Licious": "licious",
 }
 
 ASHBY_COMPANIES = {

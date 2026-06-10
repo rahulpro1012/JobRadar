@@ -9,7 +9,7 @@ Layer 5:   SerpApi Google Jobs (100/month)
 Layer 6:   Career page search URLs
 Layer 7:   SearxNG (disabled until self-hosted — set SEARXNG_URL in .env)
 Layer 8:   Yahoo Search fallback
-Layer 9:   Bing API (when key available)
+Layer 9:   Bing API (disabled — not using)
 Layer 10:  DuckDuckGo (disabled, kept for future)
 ── Phase 1 additions ──
 Layer 11:  RemoteOK (free, no key — worldwide remote jobs)
@@ -31,6 +31,14 @@ Layer 22:  Swiggy Direct (direct career page scraping)
 Layer 23:  CRED Direct (direct career page scraping)
 Layer 24:  PhonePe Direct (direct career page scraping)
 Layer 25:  Zomato Direct (direct career page scraping)
+
+── DISABLED (damage control) ──
+Brave Search: Not using (no key configured)
+Bing API: Not using (no key configured)
+Indian Unicorns: 117s for 0 jobs
+Career Pages: 0 jobs
+Direct Scrapers (5): 0 jobs, placeholder selectors
+Naukri (4 locations): HTTP 406 blocks, perma-open circuit breaker
 """
 import re
 import time
@@ -141,24 +149,24 @@ def fetch_all_jobs(profile, config):
     yahoo_q = _build_portal_queries(profile, queries, search_locations)[:4]
     layers.append(("Yahoo", fetch_from_yahoo, {"queries": yahoo_q, "delay": 1.5}))
 
-    # ── Layer 9: Bing ──
-    bing_key = config.get("BING_API_KEY", "")
-    if bing_key:
-        today_usage = get_quota_usage("bing")
-        remaining = QUOTA_LIMITS["bing"] - today_usage
-        if remaining > 0:
-            def _fetch_bing_safe():
-                jobs = []
-                try:
-                    top_queries = [q for q in queries if q["tier"] <= 2][:3]
-                    site_queries = generate_site_queries(top_queries, ["naukri.com", "indeed.co.in"])
-                    max_calls = min(6, remaining, len(site_queries))
-                    for sq in site_queries[:max_calls]:
-                        jobs.extend(_fetch_from_bing(sq["site_query"], bing_key, scrape_delay))
-                except Exception as e:
-                    logger.warning(f"Bing failed: {e}")
-                return jobs
-            layers.append(("Bing", _fetch_bing_safe, {}))
+    # ❌ DISABLED 2026-06-08: Not using Bing API (no key configured, low priority)
+    # bing_key = config.get("BING_API_KEY", "")
+    # if bing_key:
+    #     today_usage = get_quota_usage("bing")
+    #     remaining = QUOTA_LIMITS["bing"] - today_usage
+    #     if remaining > 0:
+    #         def _fetch_bing_safe():
+    #             jobs = []
+    #             try:
+    #                 top_queries = [q for q in queries if q["tier"] <= 2][:3]
+    #                 site_queries = generate_site_queries(top_queries, ["naukri.com", "indeed.co.in"])
+    #                 max_calls = min(6, remaining, len(site_queries))
+    #                 for sq in site_queries[:max_calls]:
+    #                     jobs.extend(_fetch_from_bing(sq["site_query"], bing_key, scrape_delay))
+    #             except Exception as e:
+    #                 logger.warning(f"Bing failed: {e}")
+    #             return jobs
+    #         layers.append(("Bing", _fetch_bing_safe, {}))
 
     # ── Layer 11: RemoteOK ──
     from app.services.remoteok_fetcher import fetch_remoteok_jobs
@@ -219,12 +227,12 @@ def fetch_all_jobs(profile, config):
     # layers.append(("PhonePe Direct", fetch_phonepe, {"profile": profile}))
     # layers.append(("Zomato Direct", fetch_zomato, {"profile": profile}))
 
-    # ── Layer 26: Brave Search (optional, requires API key) ──
-    brave_key = config.get("BRAVE_SEARCH_API_KEY", "")
-    if brave_key:
-        from app.services.brave_search_fetcher import fetch_brave_search_jobs
-        brave_queries = [q["query"] if isinstance(q, dict) else q for q in queries]
-        layers.append(("Brave Search", fetch_brave_search_jobs, {"profile": profile, "queries": brave_queries, "api_key": brave_key, "max_results": 20}))
+    # ❌ DISABLED 2026-06-08: Not using Brave Search API (no key configured, low priority)
+    # brave_key = config.get("BRAVE_SEARCH_API_KEY", "")
+    # if brave_key:
+    #     from app.services.brave_search_fetcher import fetch_brave_search_jobs
+    #     brave_queries = [q["query"] if isinstance(q, dict) else q for q in queries]
+    #     layers.append(("Brave Search", fetch_brave_search_jobs, {"profile": profile, "queries": brave_queries, "api_key": brave_key, "max_results": 20}))
 
     # ═══════════════════════════════════════════════════════════════
     # RUN ALL LAYERS IN PARALLEL

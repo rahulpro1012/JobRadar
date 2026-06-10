@@ -52,6 +52,130 @@ WORK_TYPES = {
 }
 
 
+def _fetch_linkedin_variant(
+    query: str,
+    location: str,
+    remote_only: bool,
+    max_pages: int,
+    pf: ProfileFilter,
+) -> list:
+    """
+    Fetch jobs for a single query variant.
+
+    Issue 3: Helper to run both remote-only and location-only variants.
+    """
+    variant_name = "remote" if remote_only else "local"
+    variant_location = "Worldwide" if remote_only else location
+    variant_work_type = WORK_TYPES["remote"] if remote_only else None
+
+    # Check cache first
+    cache_key = f"{query}|{variant_name}"
+    cached = cache_get(SOURCE_NAME, cache_key, variant_location, ttl_hours=6)
+    if cached is not None:
+        logger.debug(f"[{SOURCE_NAME}] cache hit for '{query}' ({variant_name}) / {variant_location}")
+        return cached
+
+    variant_jobs = []
+
+    for page in range(max_pages):
+        try:
+            params = {
+                "keywords": query,
+                "location": variant_location,
+                "f_TPR": TIME_FILTERS["week"],
+                "start": page * 25,
+            }
+
+            # Issue 3: Only add f_WT for remote-only variant
+            if remote_only:
+                params["f_WT"] = variant_work_type
+
+            headers = {
+                "User-Agent": random.choice(USER_AGENTS),
+                "Accept-Language": "en-US,en;q=0.9",
+                "Accept": "text/html,application/xhtml+xml",
+                "Referer": "https://www.linkedin.com/jobs/",
+            }
+
+            resp = requests.get(
+                ENDPOINT,
+                params=params,
+                headers=headers,
+                timeout=15,
+                verify=False,
+            )
+
+            # Rate limit detection
+            if resp.status_code == 429:
+                record_failure(SOURCE_NAME, f"429 rate_limited at page {page}")
+                logger.warning(f"[{SOURCE_NAME}] 429 rate limit hit ({variant_name}), stopping")
+                break
+
+            # Other HTTP errors
+            if resp.status_code != 200:
+                logger.debug(f"[{SOURCE_NAME}] {query} ({variant_name}): HTTP {resp.status_code}")
+                break
+
+            # Parse HTML response
+            soup = BeautifulSoup(resp.text, "html.parser")
+            job_cards = soup.select("li div.base-card") or soup.select(".job-search-card")
+
+            if not job_cards:
+                logger.debug(f"[{SOURCE_NAME}] no job cards found on page {page} ({variant_name})")
+                break
+
+            for card in job_cards:
+                try:
+                    title_el = card.select_one(".base-search-card__title")
+                    company_el = card.select_one(".base-search-card__subtitle")
+                    location_el = card.select_one(".job-search-card__location")
+                    link_el = card.select_one("a.base-card__full-link")
+                    date_el = card.select_one("time")
+
+                    if not (title_el and link_el):
+                        continue
+
+                    title = title_el.get_text(strip=True)
+                    company = company_el.get_text(strip=True) if company_el else "Unknown"
+                    job_location = location_el.get_text(strip=True) if location_el else variant_location
+                    job_url = link_el.get("href", "").split("?")[0]
+                    posted_date = date_el.get("datetime", "") if date_el else ""
+
+                    if not job_url:
+                        continue
+
+                    # ProfileFilter matching
+                    keep, _ = pf.should_keep(title, "")
+                    if not keep:
+                        continue
+
+                    variant_jobs.append({
+                        "title": title[:150],
+                        "company": company[:100],
+                        "location": job_location[:100],
+                        "source_url": job_url,
+                        "source_domain": "linkedin.com",
+                        "description_snippet": "",
+                        "posted_date": posted_date[:10] if posted_date else "",
+                        "skills_found": json.dumps([]),
+                    })
+
+                except Exception:
+                    continue
+
+            time.sleep(random.uniform(2, 4))  # Small delay between pages
+
+        except Exception as e:
+            logger.debug(f"[{SOURCE_NAME}] {query} ({variant_name}) fetch error: {e}")
+            break
+
+    # Cache results
+    if variant_jobs:
+        cache_set(SOURCE_NAME, cache_key, variant_jobs, variant_location, ttl_hours=6)
+
+    return variant_jobs
+
+
 def fetch_linkedin_guest_jobs(
     profile: dict,
     queries: list[str] = None,
@@ -62,12 +186,14 @@ def fetch_linkedin_guest_jobs(
     """
     Fetch jobs from LinkedIn jobs-guest endpoint with strict rate limiting.
 
+    Issue 3: Runs BOTH remote-only and location-only variants per query.
+
     Args:
         profile: Parsed user profile dict.
         queries: List of search queries. If None, uses common defaults.
         location: Base location for searches (e.g., "Pune", "India", "Remote").
         max_pages: Max pages per query (default 2 = 50 jobs). Increase cautiously.
-        delay_range: (min, max) seconds delay between requests. Default (3, 6).
+        delay_range: (min, max) seconds delay between requests. Default (5, 10).
 
     Returns:
         List of normalised job dicts ready for DB insertion.
@@ -88,130 +214,29 @@ def fetch_linkedin_guest_jobs(
 
     pf = ProfileFilter(profile)
     all_jobs = []
+    seen_urls = set()  # Dedupe across variants
 
     for query in queries:
         # Strip quotes and filler, truncate to 5 words
         query = query.replace('"', '').replace("'", "")
         query = " ".join(query.split()[:5])
 
-        # For "remote" queries, don't filter by specific location
-        # LinkedIn remote jobs are worldwide; location param conflicts with f_WT=2
-        query_location = "Worldwide" if "remote" in query.lower() else location
+        # Issue 3: Run BOTH variants
+        # Variant 1: Remote-only (f_WT=2, location=Worldwide)
+        remote_jobs = _fetch_linkedin_variant(query, location, remote_only=True, max_pages=max_pages, pf=pf)
 
-        # Check cache first
-        cached = cache_get(SOURCE_NAME, query, query_location, ttl_hours=6)
-        if cached is not None:
-            logger.info(f"[{SOURCE_NAME}] cache hit for '{query}' / {query_location}")
-            all_jobs.extend(cached)
-            continue
+        # Variant 2: Location-only (no f_WT, location=Pune/India)
+        local_jobs = _fetch_linkedin_variant(query, location, remote_only=False, max_pages=max_pages, pf=pf)
 
-        page_jobs = []
-
-        for page in range(max_pages):
-            try:
-                # Build request with defensive params
-                params = {
-                    "keywords": query,
-                    "location": query_location,
-                    "f_TPR": TIME_FILTERS["week"],  # Last 7 days (was month)
-                    "f_WT": WORK_TYPES["remote"],    # Remote jobs only
-                    "start": page * 25,
-                }
-                headers = {
-                    "User-Agent": random.choice(USER_AGENTS),
-                    "Accept-Language": "en-US,en;q=0.9",
-                    "Accept": "text/html,application/xhtml+xml",
-                    "Referer": "https://www.linkedin.com/jobs/",
-                }
-
-                resp = requests.get(
-                    ENDPOINT,
-                    params=params,
-                    headers=headers,
-                    timeout=15,
-                    verify=False,
-                )
-
-                # Rate limit detection
-                if resp.status_code == 429:
-                    record_failure(SOURCE_NAME, f"429 rate_limited at page {page}")
-                    logger.warning(f"[{SOURCE_NAME}] 429 rate limit hit, stopping this query")
-                    break
-
-                # Other HTTP errors
-                if resp.status_code != 200:
-                    record_failure(SOURCE_NAME, f"HTTP {resp.status_code} for '{query}'")
-                    logger.warning(f"[{SOURCE_NAME}] {query}: HTTP {resp.status_code}")
-                    break
-
-                # Parse HTML response
-                soup = BeautifulSoup(resp.text, "html.parser")
-            except Exception as e:
-                record_failure(SOURCE_NAME, str(e))
-                logger.warning(f"[{SOURCE_NAME}] {query} fetch error: {e}")
-                break
-
-            # Extract job cards from HTML
-            # LinkedIn uses dynamic selectors; try multiple options
-            job_cards = soup.select("li div.base-card") or soup.select(".job-search-card")
-
-            if not job_cards:
-                logger.debug(f"[{SOURCE_NAME}] no job cards found on page {page}")
-                break
-
-            for card in job_cards:
-                try:
-                    title_el = card.select_one(".base-search-card__title")
-                    company_el = card.select_one(".base-search-card__subtitle")
-                    location_el = card.select_one(".job-search-card__location")
-                    link_el = card.select_one("a.base-card__full-link")
-                    date_el = card.select_one("time")
-
-                    if not (title_el and link_el):
-                        continue
-
-                    title = title_el.get_text(strip=True)
-                    company = company_el.get_text(strip=True) if company_el else "Unknown"
-                    job_location = (
-                        location_el.get_text(strip=True) if location_el else location
-                    )
-                    job_url = link_el.get("href", "").split("?")[0]
-                    posted_date = date_el.get("datetime", "") if date_el else ""
-
-                    if not job_url:
-                        continue
-
-                    # ProfileFilter matching on title only (no full description available)
-                    keep, _ = pf.should_keep(title, "")
-                    if not keep:
-                        continue
-
-                    page_jobs.append({
-                        "title": title[:150],
-                        "company": company[:100],
-                        "location": job_location[:100],
-                        "source_url": job_url,
-                        "source_domain": "linkedin.com/jobs",
-                        "description_snippet": "",
-                        "posted_date": posted_date,
-                        "skills_found": json.dumps([]),
-                    })
-                except (AttributeError, KeyError, IndexError) as e:
-                    logger.debug(f"[{SOURCE_NAME}] failed to parse card: {e}")
-                    continue
-
-            # Polite delay before next page
-            if page < max_pages - 1 and page_jobs:
-                delay = random.uniform(delay_range[0], delay_range[1])
-                time.sleep(delay)
-
-        # Cache results for this query (using the adjusted location)
-        cache_set(SOURCE_NAME, query, page_jobs, query_location, ttl_hours=6)
-        all_jobs.extend(page_jobs)
+        # Dedupe and combine
+        for job in remote_jobs + local_jobs:
+            url = job["source_url"]
+            if url not in seen_urls:
+                seen_urls.add(url)
+                all_jobs.append(job)
 
         # Delay between queries
-        delay = random.uniform(delay_range[0], delay_range[1])
-        time.sleep(delay)
+        time.sleep(random.uniform(delay_range[0], delay_range[1]))
 
     # Record success
     if all_jobs:

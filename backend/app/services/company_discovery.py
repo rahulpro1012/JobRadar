@@ -37,6 +37,40 @@ ATS_PROBES = {
 # Request timeout
 REQUEST_TIMEOUT = 8
 
+# Garbage data blacklist (Issue 1: Company Discovery Garbage Data)
+LOCATION_BLACKLIST = {
+    'pune', 'bengaluru', 'delhi', 'mumbai', 'bangalore',
+    'india', 'remote', 'worldwide', 'global', 'international',
+    'onsite', 'hybrid', 'across', 'various', 'multiple'
+}
+
+
+def _is_valid_company_name(name: str) -> bool:
+    """
+    Sanity filter to reject garbage company names from discovery feed.
+
+    Rejects:
+    - Names with punctuation indicating concatenation (locations, job titles)
+    - Obvious location names (Pune, Bengaluru, Delhi, etc.)
+    - Very short or very long names
+
+    Keeps: Legitimate company names like "Razorpay", "BCforward", "3M"
+    """
+    if not name or len(name) < 2 or len(name) > 60:
+        return False
+
+    name_lower = name.lower()
+
+    # Reject obvious locations
+    if name_lower in LOCATION_BLACKLIST:
+        return False
+
+    # Reject multi-part strings (location + description: "Location, Role 6-8 years")
+    if any(p in name for p in [",", "(", ")", "/"]):
+        return False
+
+    return True
+
 
 def discover_company(company_name: str, background: bool = True) -> str:
     """
@@ -51,6 +85,11 @@ def discover_company(company_name: str, background: bool = True) -> str:
         ATS name if found ("greenhouse", "lever", "ashby", "workable"), or empty string.
     """
     if not company_name or not isinstance(company_name, str):
+        return ""
+
+    # Issue 1: Reject garbage names (locations, concatenated strings)
+    if not _is_valid_company_name(company_name):
+        logger.debug(f"[discovery] Rejected garbage company name: {company_name}")
         return ""
 
     slug = _to_slug(company_name)
@@ -82,12 +121,20 @@ def discover_company(company_name: str, background: bool = True) -> str:
 
             resp = requests.get(url, timeout=REQUEST_TIMEOUT, verify=False)
 
-            # Status 200 + has jobs = found
+            # Issue 2: Distinguish 0-jobs (status 200, empty response) from 404 (not found)
             if resp.status_code == 200:
-                if _has_jobs(resp.json(), ats):
-                    _persist_discovery(slug, company_name, ats)
-                    logger.info(f"[discovery] Found {company_name} on {ats}")
-                    return ats
+                data = resp.json()
+                job_count = _count_jobs(data, ats)
+
+                # Status 200 = company exists on this ATS (whether or not it has jobs)
+                _persist_discovery(slug, company_name, ats, job_count)
+
+                if job_count > 0:
+                    logger.info(f"[discovery] Found {company_name} on {ats} with {job_count} jobs")
+                else:
+                    logger.debug(f"[discovery] Found {company_name} on {ats} (no current jobs)")
+
+                return ats
         except requests.Timeout:
             continue
         except Exception:
@@ -180,44 +227,70 @@ def _to_slug(name: str) -> str:
     return slug
 
 
+def _count_jobs(response_data, ats: str) -> int:
+    """
+    Count jobs in API response.
+
+    Issue 2: Used to distinguish "exists with 0 jobs" from "doesn't exist".
+    Different ATS APIs return different structures.
+    """
+    if not response_data:
+        return 0
+
+    if ats == "greenhouse":
+        jobs = response_data.get("jobs", [])
+        return len(jobs) if isinstance(jobs, list) else 0
+
+    elif ats == "lever":
+        # Lever returns array of postings
+        return len(response_data) if isinstance(response_data, list) else 0
+
+    elif ats == "ashby":
+        jobs = response_data.get("jobs", [])
+        return len(jobs) if isinstance(jobs, list) else 0
+
+    elif ats == "workable":
+        jobs = response_data.get("jobs", [])
+        return len(jobs) if isinstance(jobs, list) else 0
+
+    return 0
+
+
 def _has_jobs(response_data, ats: str) -> bool:
     """
     Check if API response contains at least one job listing.
 
     Different ATS APIs return different structures.
     """
-    if not response_data:
-        return False
-
-    if ats == "greenhouse":
-        return bool(response_data.get("jobs"))
-
-    elif ats == "lever":
-        # Lever returns array of postings
-        return isinstance(response_data, list) and len(response_data) > 0
-
-    elif ats == "ashby":
-        return bool(response_data.get("jobs"))
-
-    elif ats == "workable":
-        return bool(response_data.get("jobs"))
-
-    return False
+    return _count_jobs(response_data, ats) > 0
 
 
-def _persist_discovery(slug: str, company_name: str, ats: str) -> None:
+def _persist_discovery(slug: str, company_name: str, ats: str, job_count: int = 0) -> None:
     """
     Save discovered company to registry (idempotent via INSERT OR IGNORE).
+
+    Issue 2: Tracks job_count to distinguish "exists with 0 jobs" from "doesn't exist".
+    Also updates job_count on re-discovery for existing companies.
     """
     try:
         with get_connection() as conn:
-            conn.execute("""
+            # Try insert first (new company)
+            cursor = conn.execute("""
                 INSERT OR IGNORE INTO company_registry
-                (slug, name, ats, discovered_at)
-                VALUES (?, ?, ?, ?)
-            """, (slug, company_name, ats, datetime.utcnow().isoformat()))
+                (slug, name, ats, discovered_at, job_count, last_checked)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (slug, company_name, ats, datetime.utcnow().isoformat(), job_count, datetime.utcnow().isoformat()))
+
+            # If insert did nothing (already exists), update job_count
+            if cursor.rowcount == 0:
+                conn.execute("""
+                    UPDATE company_registry
+                    SET job_count = ?, last_checked = ?
+                    WHERE slug = ?
+                """, (job_count, datetime.utcnow().isoformat(), slug))
+
             conn.commit()
-            logger.debug(f"[discovery] Persisted {company_name} ({ats})")
+            logger.debug(f"[discovery] Persisted {company_name} ({ats}) with {job_count} jobs")
     except Exception as e:
         logger.warning(f"[discovery] Failed to persist {company_name}: {e}")
 
