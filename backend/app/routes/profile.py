@@ -146,3 +146,94 @@ def update_profile():
         fetch_one=True
     )
     return jsonify({"message": "Profile updated", "profile": profile})
+
+
+@profile_bp.route("/profile/reparse", methods=["POST"])
+def reparse_resume():
+    """A1: Re-parse existing resume with v2 schema (tiered skills + explicit preferences)."""
+    profile = execute_query(
+        "SELECT * FROM profiles ORDER BY id DESC LIMIT 1",
+        fetch_one=True
+    )
+    if not profile:
+        return jsonify({"error": "No profile found. Upload a resume first."}), 404
+
+    resume_text = profile.get("resume_text", "")
+    if not resume_text:
+        return jsonify({"error": "No resume text available for re-parsing."}), 400
+
+    # Try A1 tiered parsing
+    try:
+        from app.services.ai_agent import ai_parse_resume_tiered, is_ai_enabled
+        if not is_ai_enabled():
+            return jsonify({"error": "AI features not enabled. Set GROQ_API_KEY environment variable."}), 503
+
+        v2_profile = ai_parse_resume_tiered(resume_text)
+        if not v2_profile:
+            return jsonify({"error": "Failed to parse resume with v2 schema."}), 422
+
+        # Extract and prepare data for storage
+        profile_data = v2_profile
+
+        # Convert nested JSON fields to strings for storage
+        if "skills_tiered" in profile_data and isinstance(profile_data["skills_tiered"], dict):
+            profile_data["skills_tiered"] = json.dumps(profile_data["skills_tiered"])
+        if "preferences_explicit" in profile_data and isinstance(profile_data["preferences_explicit"], dict):
+            profile_data["preferences_explicit"] = json.dumps(profile_data["preferences_explicit"])
+
+        # Ensure v1 fields are JSON strings
+        for field in ["role_variants", "core_skills", "secondary_skills", "tools", "domain_keywords"]:
+            if isinstance(profile_data.get(field), list):
+                profile_data[field] = json.dumps(profile_data[field])
+
+        # Update existing profile with v2 data
+        with get_connection() as conn:
+            conn.execute("""
+                UPDATE profiles SET
+                    schema_version = ?,
+                    skills_tiered = ?,
+                    deal_breakers = ?,
+                    preferences_explicit = ?,
+                    primary_role = ?,
+                    role_variants = ?,
+                    experience_years = ?,
+                    experience_level = ?,
+                    core_skills = ?,
+                    secondary_skills = ?,
+                    tools = ?,
+                    domain_keywords = ?,
+                    education = ?,
+                    location = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = (SELECT MAX(id) FROM profiles)
+            """, (
+                2,  # schema_version
+                profile_data.get("skills_tiered", "{}"),
+                json.dumps(profile_data.get("deal_breakers", [])),
+                profile_data.get("preferences_explicit", "{}"),
+                profile_data.get("primary_role", ""),
+                profile_data.get("role_variants", "[]"),
+                profile_data.get("experience_years", 0),
+                profile_data.get("experience_level", ""),
+                profile_data.get("core_skills", "[]"),
+                profile_data.get("secondary_skills", "[]"),
+                profile_data.get("tools", "[]"),
+                profile_data.get("domain_keywords", "[]"),
+                profile_data.get("education", ""),
+                profile_data.get("location", ""),
+            ))
+            conn.commit()
+
+        updated_profile = execute_query(
+            "SELECT * FROM profiles ORDER BY id DESC LIMIT 1",
+            fetch_one=True
+        )
+        return jsonify({
+            "message": "Resume re-parsed with v2 schema (tiered skills + preferences)",
+            "profile": updated_profile,
+            "schema_version": 2,
+        }), 200
+
+    except Exception as e:
+        logger.exception(f"A1 reparse failed: {e}")
+        return jsonify({"error": f"Re-parsing failed: {str(e)}"}), 500

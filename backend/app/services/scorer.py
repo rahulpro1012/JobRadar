@@ -25,6 +25,8 @@ def score_all_jobs(profile):
     """
     Score all unscored (or re-score all new) jobs against the profile.
     Returns the number of jobs scored.
+
+    A1: Supports tiered skill weighting if profile has schema_version >= 2
     """
     # Get all jobs that need scoring (new or score=0)
     jobs = execute_query(
@@ -34,6 +36,17 @@ def score_all_jobs(profile):
     if not jobs:
         return 0
 
+    # Check profile schema version for A1 tiered skills support
+    schema_version = profile.get("schema_version", 1)
+
+    if schema_version >= 2:
+        return _score_all_jobs_v2(profile, jobs)
+    else:
+        return _score_all_jobs_v1(profile, jobs)
+
+
+def _score_all_jobs_v1(profile, jobs):
+    """Original v1 scoring logic (backward compatible)."""
     # Parse profile fields
     core_skills = _parse_json_field(profile.get("core_skills", "[]"))
     secondary_skills = _parse_json_field(profile.get("secondary_skills", "[]"))
@@ -71,7 +84,7 @@ def score_all_jobs(profile):
             )
 
             conn.execute(
-                """UPDATE jobs 
+                """UPDATE jobs
                    SET match_score = ?, adjusted_score = ?, skills_found = ?
                    WHERE id = ?""",
                 (base_score, adjusted, json.dumps(skills_found), job["id"]),
@@ -80,8 +93,125 @@ def score_all_jobs(profile):
 
         conn.commit()
 
-    logger.info(f"Scored {scored_count} jobs")
+    logger.info(f"Scored {scored_count} jobs (v1 schema)")
     return scored_count
+
+
+def _score_all_jobs_v2(profile, jobs):
+    """A1: v2 scoring with tiered skills + deal-breaker filtering."""
+    # Parse tiered skills
+    skills_tiered = _parse_json_field(profile.get("skills_tiered", "{}"))
+    primary_skills = skills_tiered.get("primary", []) if isinstance(skills_tiered, dict) else []
+    familiar_skills = skills_tiered.get("familiar", []) if isinstance(skills_tiered, dict) else []
+    learning_skills = skills_tiered.get("learning", []) if isinstance(skills_tiered, dict) else []
+
+    # Extract skill names from tiered structure
+    primary_skill_names = [s.get("name", s) if isinstance(s, dict) else s for s in primary_skills]
+    familiar_skill_names = [s.get("name", s) if isinstance(s, dict) else s for s in familiar_skills]
+
+    # Get deal-breakers and preferences
+    preferences = _parse_json_field(profile.get("preferences_explicit", "{}"))
+    deal_breakers = preferences.get("deal_breakers", []) if isinstance(preferences, dict) else []
+
+    role = profile.get("primary_role", "")
+    role_variants = _parse_json_field(profile.get("role_variants", "[]"))
+    exp_years = profile.get("experience_years", 0)
+
+    # Load preference weights
+    pref_weights = _load_preference_weights()
+
+    scored_count = 0
+
+    with get_connection() as conn:
+        for job in jobs:
+            job_text = (job.get("title", "") + " " + job.get("description_snippet", "")).lower()
+
+            # A1: Hard filter — deal-breakers reject immediately
+            skip_job = False
+            for breaker in deal_breakers:
+                if breaker and breaker.lower() in job_text:
+                    logger.debug(f"Job {job['id']}: Deal-breaker matched '{breaker}'")
+                    skip_job = True
+                    break
+
+            if skip_job:
+                # Mark as archived instead of scoring
+                conn.execute("UPDATE jobs SET status = 'archived' WHERE id = ?", (job["id"],))
+                continue
+
+            # A1: Compute base score with tiered skill weighting
+            role_score = _score_role(job, role, role_variants)
+            exp_score = _score_experience(job, exp_years)
+            recency_score = _score_recency(job)
+
+            # Tiered skill scoring
+            skill_score = _score_skills_tiered(job, primary_skill_names, familiar_skill_names, learning_skills)
+
+            total = (
+                skill_score * 0.40
+                + role_score * 0.25
+                + exp_score * 0.20
+                + recency_score * 0.15
+            )
+            base_score = max(0, min(100, round(total)))
+
+            # Apply preference adjustments
+            adjustment = compute_preference_adjustment(job, pref_weights)
+            adjusted = max(0, min(100, base_score + adjustment))
+
+            # Extract matched skills
+            all_skill_names = primary_skill_names + familiar_skill_names
+            skills_found = _find_matching_skills(job_text, all_skill_names)
+
+            conn.execute(
+                """UPDATE jobs
+                   SET match_score = ?, adjusted_score = ?, skills_found = ?
+                   WHERE id = ?""",
+                (base_score, adjusted, json.dumps(skills_found), job["id"]),
+            )
+            scored_count += 1
+
+        conn.commit()
+
+    logger.info(f"Scored {scored_count} jobs (v2 schema, tiered skills)")
+    return scored_count
+
+
+def _score_skills_tiered(job, primary_skills, familiar_skills, learning_skills):
+    """A1: Tiered skill scoring.
+    Primary: 8 points each (max 60)
+    Familiar: 3 points each (max 30)
+    Learning: 2 points each
+    """
+    text = (
+        job.get("title", "") + " " + job.get("description_snippet", "")
+    ).lower()
+
+    score = 0
+
+    # Primary skills (highest weight)
+    primary_matches = 0
+    for skill in primary_skills:
+        if skill.lower() in text:
+            primary_matches += 1
+            score += 8
+    score = min(score, 60)
+
+    # Familiar skills
+    familiar_score = 0
+    for skill in familiar_skills:
+        if skill.lower() in text:
+            familiar_score += 3
+    score += min(familiar_score, 30)
+
+    # Learning skills (growth opportunity bonus)
+    learning_score = 0
+    for skill in learning_skills:
+        if skill.lower() in text:
+            learning_score += 2
+    score += learning_score
+
+    return min(score, 100)
 
 
 # ============================================================

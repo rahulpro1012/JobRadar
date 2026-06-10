@@ -208,16 +208,17 @@ class ProfileFilter:
     }
 
     def __init__(self, profile):
+        self.profile = profile
+        self.schema_version = profile.get("schema_version", 1)
         self.exp_years = float(profile.get("experience_years", 0))
-        self.core_skills = self._parse_list(profile.get("core_skills", []))
-        self.secondary_skills = self._parse_list(profile.get("secondary_skills", []))
-        self.tools = self._parse_list(profile.get("tools", []))
         self.role = (profile.get("primary_role", "") or "").lower()
         self.location = (profile.get("location", "") or "").lower()
 
-        # Build skill set for matching (lowercase)
-        self.all_skills = set(s.lower() for s in self.core_skills + self.secondary_skills + self.tools)
-        self.core_skills_lower = set(s.lower() for s in self.core_skills)
+        # A1: Support tiered skills (v2) or flat skills (v1)
+        if self.schema_version >= 2:
+            self._init_v2_skills(profile)
+        else:
+            self._init_v1_skills(profile)
 
         # Detect user's primary stack domains
         self.user_domains = self._detect_user_domains()
@@ -225,17 +226,58 @@ class ProfileFilter:
         # Calculate max seniority the user qualifies for
         self.max_seniority_years = self.exp_years + 2  # Allow 2 years stretch
 
-        logger.info(f"ProfileFilter: {self.exp_years}yr exp, domains={self.user_domains}, "
-                     f"{len(self.all_skills)} skills tracked")
+        logger.info(f"ProfileFilter: schema_v{self.schema_version}, {self.exp_years}yr exp, "
+                     f"domains={self.user_domains}, {len(self.all_skills)} skills tracked")
+
+    def _init_v1_skills(self, profile):
+        """Initialize flat skill lists for v1 profiles."""
+        self.core_skills = self._parse_list(profile.get("core_skills", []))
+        self.secondary_skills = self._parse_list(profile.get("secondary_skills", []))
+        self.tools = self._parse_list(profile.get("tools", []))
+        self.deal_breakers = []
+
+        # Build skill set for matching (lowercase)
+        self.all_skills = set(s.lower() for s in self.core_skills + self.secondary_skills + self.tools)
+        self.core_skills_lower = set(s.lower() for s in self.core_skills)
+
+    def _init_v2_skills(self, profile):
+        """Initialize tiered skill lists for v2 profiles (A1)."""
+        # Parse tiered skills
+        skills_tiered = self._parse_json(profile.get("skills_tiered", "{}"))
+        primary = skills_tiered.get("primary", []) if isinstance(skills_tiered, dict) else []
+        familiar = skills_tiered.get("familiar", []) if isinstance(skills_tiered, dict) else []
+        learning = skills_tiered.get("learning", []) if isinstance(skills_tiered, dict) else []
+
+        # Extract skill names from tiered structure (may be dicts with metadata)
+        self.core_skills = [s.get("name", s) if isinstance(s, dict) else s for s in primary]
+        self.secondary_skills = [s.get("name", s) if isinstance(s, dict) else s for s in familiar]
+        self.learning_skills = learning if isinstance(learning, list) else []
+        self.tools = self._parse_list(profile.get("tools", []))
+
+        # Build skill set (lowercase)
+        all_skill_list = self.core_skills + self.secondary_skills + self.learning_skills + self.tools
+        self.all_skills = set(s.lower() for s in all_skill_list)
+        self.core_skills_lower = set(s.lower() for s in self.core_skills)
+
+        # A1: Extract deal-breakers from preferences
+        preferences = self._parse_json(profile.get("preferences_explicit", "{}"))
+        self.deal_breakers = preferences.get("deal_breakers", []) if isinstance(preferences, dict) else []
 
     def should_keep(self, title, description=""):
         """
         Decide whether to keep a job based on profile matching.
         Returns (keep: bool, reason: str)
+
+        A1: Checks deal-breakers first (hard rejects)
         """
         title_lower = title.lower()
         desc_lower = description.lower() if description else ""
         searchable = title_lower + " " + desc_lower
+
+        # ── A1: Check 0: Deal-breaker hard filter ──
+        for breaker in self.deal_breakers:
+            if breaker and breaker.lower() in searchable:
+                return False, f"deal_breaker:{breaker}"
 
         # ── Check 1: Seniority filter ──
         seniority_ok, seniority_reason = self._check_seniority(title_lower)
@@ -252,11 +294,19 @@ class ProfileFilter:
             return False, stack_reason
 
         # ── Check 4: Minimum skill overlap ──
-        matching_skills = self._count_skill_matches(searchable)
-        if matching_skills < 1:
-            # If no skills match at all, check if role title matches
-            if not self._role_matches(title_lower):
-                return False, "no_skill_overlap"
+        # A1: For v2 profiles, require at least one primary skill match
+        if self.schema_version >= 2:
+            primary_matches = sum(1 for s in self.core_skills_lower if s in searchable)
+            if primary_matches < 1:
+                # Fall back to role matching if no primary skills match
+                if not self._role_matches(title_lower):
+                    return False, "no_primary_skill_match"
+        else:
+            matching_skills = self._count_skill_matches(searchable)
+            if matching_skills < 1:
+                # If no skills match at all, check if role title matches
+                if not self._role_matches(title_lower):
+                    return False, "no_skill_overlap"
 
         return True, "passed"
 
@@ -381,6 +431,18 @@ class ProfileFilter:
             except (json.JSONDecodeError, TypeError):
                 return []
         return []
+
+    @staticmethod
+    def _parse_json(value):
+        """Parse JSON field (dict or string)."""
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except (json.JSONDecodeError, TypeError):
+                return {}
+        return {}
 
 
 # ============================================================
