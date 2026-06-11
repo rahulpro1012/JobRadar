@@ -16,19 +16,20 @@ from app.database import increment_quota
 
 logger = logging.getLogger(__name__)
 
-# Self-hosted instance (primary when SEARXNG_URL is set in .env) + public fallbacks
+# Self-hosted instance (primary when SEARXNG_URL is set in .env) + a couple of
+# public fallbacks. Trimmed: search.indst.eu reliably 429s, and the long tail
+# of public instances mostly times out — keeping fewer fallbacks fails faster.
 _self_hosted = os.environ.get("SEARXNG_URL", "").rstrip("/")
 SEARXNG_INSTANCES = [u for u in [
     _self_hosted,                       # self-hosted on Render (preferred)
-    "https://search.indst.eu",
-    "https://search.einfachzocken.eu",
     "https://search.hbubli.cc",
     "https://search.im-in.space",
-    "https://search.federicociro.com",
-    "https://ooglester.com",
-    "https://metacat.online",
-    "https://search.canine.tools",
 ] if u]  # drop empty string when SEARXNG_URL is not set
+
+# Engines to request explicitly. Google/Bing are kept (they sometimes respond),
+# and datacenter-IP-tolerant engines are added so site: queries still yield
+# results when Google/Bing get rate-limited from a datacenter IP.
+SEARXNG_ENGINES = "google,bing,duckduckgo,brave,mojeek,startpage"
 
 
 # ============================================================
@@ -69,9 +70,10 @@ def fetch_from_searxng(queries, delay=1.5):
                     "format": "json",
                     "categories": "general",
                     "language": "en",
+                    "engines": SEARXNG_ENGINES,
                 },
                 headers={"User-Agent": "JobRadar/1.0"},
-                timeout=30,
+                timeout=18,
                 verify=False,
             )
             increment_quota("searxng")

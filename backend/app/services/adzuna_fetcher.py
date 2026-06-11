@@ -16,6 +16,7 @@ import time
 import logging
 import requests
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from app.services.ats_fetcher import ProfileFilter
 from app.services.source_health import is_healthy, record_success, record_failure
 from app.services.search_cache import cache_get, cache_set
@@ -26,15 +27,20 @@ logger = logging.getLogger(__name__)
 SOURCE_NAME = "adzuna"
 BASE_URL = "https://api.adzuna.com/v1/api/jobs/in/search/1"
 
-# 3 queries × 4 locations = 12 API calls max per refresh
+# 3 queries × 3 locations = 9 API calls max per refresh (run in parallel)
 MAX_QUERIES_PER_REFRESH = 3
 # Daily budget: 36 calls/day ≈ 1080/month (still within 250-1000 free tier)
-# Allows 3x more jobs per refresh (36/12 = 3 refreshes/day at full capacity)
 DAILY_LIMIT = 36
 CACHE_TTL_HOURS = 12
 
-# Rotate across these cities — title-case matches Adzuna's location field
-SEARCH_LOCATIONS = ["Pune", "Bangalore", "Mumbai", "Remote"]
+# Rotate across these cities — title-case matches Adzuna's location field.
+# "Remote" dropped: Adzuna India returns an empty (78-byte) payload for it.
+SEARCH_LOCATIONS = ["Pune", "Bangalore", "Mumbai"]
+
+# Per-call read timeout (start at 15s for cold-run testing; tune toward 10 later)
+REQUEST_TIMEOUT = 15
+# Parallel workers for the (query × location) call matrix
+MAX_WORKERS = 6
 
 
 def fetch_adzuna_jobs(
@@ -92,73 +98,47 @@ def fetch_adzuna_jobs(
             seen.add(text.lower())
             query_texts.append(text)
 
-    all_jobs = []
-    calls_made = 0
-    # Total budget: 3 queries × 4 locations, capped by remaining daily quota
+    # Build the (query, location) call matrix, capped by remaining daily quota.
+    # Cache hits are served first (cheap) and don't count against the live-call budget.
     max_calls = min(MAX_QUERIES_PER_REFRESH * len(SEARCH_LOCATIONS), remaining_quota)
+    all_jobs = []
+    live_tasks = []  # (query_text, location) pairs that need a live API call
 
     for query_text in query_texts[:MAX_QUERIES_PER_REFRESH]:
         query_text = _clean_for_adzuna(query_text)
-        if calls_made >= max_calls:
-            break
-
         for location in SEARCH_LOCATIONS:
-            if calls_made >= max_calls:
-                break
-
-            # Try cache first (keyed by query + location independently)
             cached = cache_get(
                 SOURCE_NAME, query_text, location=location.lower(), ttl_hours=CACHE_TTL_HOURS
             )
             if cached is not None:
-                logger.debug(
-                    f"[{SOURCE_NAME}] cache hit: '{query_text[:40]}' @ {location}"
-                )
+                logger.debug(f"[{SOURCE_NAME}] cache hit: '{query_text[:40]}' @ {location}")
                 all_jobs.extend([j for j in cached if _profile_matches(j, pf)])
-                continue
+            else:
+                live_tasks.append((query_text, location))
 
-            try:
-                params = {
-                    "app_id": app_id,
-                    "app_key": app_key,
-                    "what": query_text,
-                    "where": location,       # ← location rotation (was hardcoded "India")
-                    "results_per_page": 50,
-                    "max_days_old": 30,
-                    "sort_by": "date",
-                }
-                resp = requests.get(
-                    BASE_URL,
-                    params=params,
-                    timeout=20,
-                    verify=False,
-                )
-                resp.raise_for_status()
-                results = resp.json().get("results", [])
-                increment_quota(SOURCE_NAME, today)
+    # Respect the daily quota cap on live calls
+    live_tasks = live_tasks[:max_calls]
+    calls_made = 0
+
+    # Patch: run the live (query × location) calls in parallel instead of sequentially.
+    if live_tasks:
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS, thread_name_prefix="adzuna") as executor:
+            future_to_task = {
+                executor.submit(_fetch_one_adzuna, q, loc, app_id, app_key, today): (q, loc)
+                for q, loc in live_tasks
+            }
+            for future in as_completed(future_to_task):
+                q, loc = future_to_task[future]
+                try:
+                    normalised = future.result(timeout=REQUEST_TIMEOUT + 5)
+                except Exception as e:
+                    record_failure(SOURCE_NAME, f"query='{q[:40]}' loc={loc}: {e}")
+                    logger.warning(f"[{SOURCE_NAME}] API error '{q[:40]}' @ {loc}: {e}")
+                    continue
+                if normalised is None:
+                    continue
                 calls_made += 1
-            except Exception as e:
-                record_failure(
-                    SOURCE_NAME,
-                    f"query='{query_text[:40]}' loc={location}: {e}",
-                )
-                logger.warning(
-                    f"[{SOURCE_NAME}] API error '{query_text[:40]}' @ {location}: {e}"
-                )
-                time.sleep(delay)
-                continue
-
-            normalised = [_normalise(r) for r in results if r.get("title")]
-
-            # Cache raw normalised results keyed by (query, location)
-            cache_set(
-                SOURCE_NAME, query_text, normalised,
-                location=location.lower(), ttl_hours=CACHE_TTL_HOURS,
-            )
-
-            filtered_jobs = [j for j in normalised if _profile_matches(j, pf)]
-            all_jobs.extend(filtered_jobs)
-            time.sleep(delay)
+                all_jobs.extend([j for j in normalised if _profile_matches(j, pf)])
 
     if all_jobs:
         record_success(SOURCE_NAME, jobs_returned=len(all_jobs))
@@ -168,6 +148,35 @@ def fetch_adzuna_jobs(
         f"locations: {SEARCH_LOCATIONS})"
     )
     return all_jobs
+
+
+def _fetch_one_adzuna(query_text, location, app_id, app_key, today):
+    """Fetch + normalise + cache one (query, location) Adzuna call.
+
+    Returns the normalised job list (cached for future refreshes), or raises
+    on HTTP/transport error so the caller can record the failure. Runs inside
+    a ThreadPoolExecutor worker.
+    """
+    params = {
+        "app_id": app_id,
+        "app_key": app_key,
+        "what": query_text,
+        "where": location,
+        "results_per_page": 50,
+        "max_days_old": 30,
+        "sort_by": "date",
+    }
+    resp = requests.get(BASE_URL, params=params, timeout=REQUEST_TIMEOUT, verify=False)
+    resp.raise_for_status()
+    results = resp.json().get("results", [])
+    increment_quota(SOURCE_NAME, today)
+
+    normalised = [_normalise(r) for r in results if r.get("title")]
+    cache_set(
+        SOURCE_NAME, query_text, normalised,
+        location=location.lower(), ttl_hours=CACHE_TTL_HOURS,
+    )
+    return normalised
 
 
 def _clean_for_adzuna(query: str) -> str:
