@@ -69,11 +69,14 @@ import uuid
 from datetime import datetime
 
 
-def fetch_all_jobs(profile, config):
+def fetch_all_jobs(profile, config, job_id=None):
     """
     ── PHASE 1: PARALLEL LAYER EXECUTION ──
     Fetch from ALL 16 layers in parallel using ThreadPoolExecutor.
     Expected time: ~45-60 sec (bounded by slowest layer, typically ATS at ~50s).
+
+    If job_id is provided (async refresh), per-layer progress is written to the
+    refresh_jobs row so the frontend loader can show live source counts.
 
     Previously: ~3 min 10 sec (sequential execution)
 
@@ -265,7 +268,15 @@ def fetch_all_jobs(profile, config):
     # ═══════════════════════════════════════════════════════════════
     logger.info(f"Phase 1: Parallel fetch from {len(layers)} layers (max_workers=12, timeout=90s per layer)...")
 
+    # Async progress: seed the real layer count so the loader can show N/total
+    if job_id:
+        from app.database import update_refresh_job
+        update_refresh_job(job_id, sources_total=len(layers), sources_done=0, jobs_fetched=0)
+
     all_jobs = []
+    done = 0
+    failed = 0
+    per_source = {}
     with ThreadPoolExecutor(max_workers=12) as executor:
         futures = {
             executor.submit(_safe_run_layer, name, fn, kwargs): name
@@ -278,10 +289,24 @@ def fetch_all_jobs(profile, config):
                 jobs, elapsed = future.result(timeout=95)  # Hard cap
                 all_jobs.extend(jobs)
                 layer_timings[name] = (len(jobs), round(elapsed, 1))
+                per_source[name] = len(jobs)
                 logger.info(f"  [{name}] {len(jobs)} jobs ({elapsed:.1f}s)")
             except Exception as e:
                 logger.warning(f"  [{name}] failed: {e}")
                 layer_timings[name] = (0, -1)
+                per_source[name] = 0
+                failed += 1
+            finally:
+                done += 1
+                # Async progress: push live source/jobs counts to the refresh_jobs row
+                if job_id:
+                    update_refresh_job(
+                        job_id,
+                        sources_done=done,
+                        sources_failed=failed,
+                        jobs_fetched=len(all_jobs),
+                        per_source_json=json.dumps(per_source),
+                    )
 
     logger.info(f"Phase 1 complete: {len(all_jobs)} total jobs from {len(layers)} layers")
     logger.debug(f"Per-layer timing: {layer_timings}")
@@ -655,7 +680,7 @@ def _run_refresh_background(job_id, profile, config):
         logger.info(f"[RefreshJob {job_id}] Starting Phase 1: parallel fetch...")
         update_refresh_job(job_id, status='running')
 
-        new_count = fetch_all_jobs(profile, config)
+        new_count = fetch_all_jobs(profile, config, job_id=job_id)
 
         # === STAGE 2: Apply filters + dedup + rule-based scoring (DB-based) ===
         logger.info(f"[RefreshJob {job_id}] Stage 2: applying filters...")

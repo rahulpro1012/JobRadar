@@ -747,14 +747,14 @@ Red flag types: seniority_mismatch, stale_posting, underpaid, generic_jd, experi
                 "title": job['title'],
                 "company": job.get('company', ''),
                 "location": job.get('location', ''),
-                "description": job.get('description_snippet', '')[:400],
+                "description": job.get('description_snippet', '')[:250],
                 "posted_date": job.get('posted_date', ''),
             }
             job_jsons.append(job_compact)
 
         prompt = f"Analyze these {len(batch)} jobs:\n\n{json.dumps(job_jsons, indent=2)}"
 
-        result = _call_groq(prompt, system_prompt, model=FAST_MODEL, max_tokens=4000, temperature=0.1)
+        result = _call_groq(prompt, system_prompt, model=FAST_MODEL, max_tokens=1500, temperature=0.1)
         if not result:
             logger.debug(f"C1: No response from Groq for batch of {len(batch)} jobs")
             continue

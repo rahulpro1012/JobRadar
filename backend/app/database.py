@@ -450,7 +450,7 @@ def get_refresh_job(job_id):
 def update_refresh_job(job_id, **updates):
     """Update refresh job fields (status, jobs_fetched, per_source_json, etc.)."""
     allowed_fields = {
-        'status', 'sources_done', 'sources_failed', 'jobs_fetched',
+        'status', 'sources_total', 'sources_done', 'sources_failed', 'jobs_fetched',
         'jobs_new', 'jobs_ai_scored', 'per_source_json', 'error_message',
         'completed_at', 'duration_sec'
     }
