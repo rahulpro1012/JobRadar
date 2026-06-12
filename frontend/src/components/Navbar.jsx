@@ -1,8 +1,8 @@
 import { useRef, useState } from 'react';
-import { Radar, Upload, RefreshCw, Settings, Loader2, Sun, Moon } from 'lucide-react';
+import { Radar, Upload, RefreshCw, Settings, Loader2, Sun, Moon, Mail } from 'lucide-react';
 import { useTheme } from '../utils/ThemeContext';
 
-export default function Navbar({ onUpload, onRefresh, onSettingsClick, isRefreshing, hasProfile }) {
+export default function Navbar({ onUpload, onRefresh, onScanEmail, emailEnabled, onSettingsClick, isRefreshing, hasProfile }) {
   const fileRef = useRef(null);
   const [uploading, setUploading] = useState(false);
   const { theme, toggle } = useTheme();
@@ -49,6 +49,13 @@ export default function Navbar({ onUpload, onRefresh, onSettingsClick, isRefresh
             title={!hasProfile ? 'Upload a resume first' : 'Refresh jobs'}>
             {isRefreshing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
             <span className="hidden sm:inline">Refresh</span>
+          </button>
+
+          <button onClick={onScanEmail} disabled={isRefreshing || !hasProfile || !emailEnabled}
+            className="btn-secondary text-xs sm:text-sm"
+            title={!emailEnabled ? 'Set GMAIL_ADDRESS and GMAIL_APP_PASSWORD to enable' : !hasProfile ? 'Upload a resume first' : 'Scan job-alert emails'}>
+            <Mail className="w-4 h-4" />
+            <span className="hidden sm:inline">Scan Email</span>
           </button>
 
           <button onClick={onSettingsClick} className="btn-ghost p-2">

@@ -47,6 +47,7 @@ export default function App() {
   const [refreshProgress, setRefreshProgress] = useState(null);
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [showDismissed, setShowDismissed] = useState(false);
+  const [emailEnabled, setEmailEnabled] = useState(false);
 
   const fileRef = useRef(null);
   const pollRef = useRef(null);
@@ -101,6 +102,12 @@ export default function App() {
         setProfile(null);
       }
       await Promise.all([loadJobs(), loadStats(), loadBlacklistCount()]);
+
+      // Email scanner availability (enables the navbar button)
+      try {
+        const es = await api.getEmailStatus();
+        setEmailEnabled(!!es.data?.enabled);
+      } catch {}
 
       // Reconnect to an in-flight refresh (e.g. page reloaded mid-run)
       try {
@@ -216,6 +223,19 @@ export default function App() {
     } catch (err) {
       setRefreshing(false);
       toast.error(err.response?.data?.error || "Refresh failed to start");
+    }
+  };
+
+  const handleScanEmail = async () => {
+    if (refreshing) return;
+    setRefreshProgress(null);
+    setRefreshing(true);
+    try {
+      const res = await api.scanEmailAsync();
+      startPolling(res.data.job_id);
+    } catch (err) {
+      setRefreshing(false);
+      toast.error(err.response?.data?.error || "Email scan failed to start");
     }
   };
 
@@ -340,6 +360,8 @@ export default function App() {
       <Navbar
         onUpload={handleUpload}
         onRefresh={handleRefresh}
+        onScanEmail={handleScanEmail}
+        emailEnabled={emailEnabled}
         onSettingsClick={() => {
           setSettingsTab("quota");
           setSettingsOpen(true);

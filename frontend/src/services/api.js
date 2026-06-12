@@ -114,4 +114,17 @@ export const getSourceHealth = () => api.get('/admin/source-health');
 export const resetSourceHealth = (source) =>
   api.post(`/admin/source-health/${source}/reset`);
 
+// ============================================================
+// Email scanner (Feature 1)
+// ============================================================
+
+export const getEmailStatus = () => api.get('/email/status');
+export const testEmail = () => api.post('/email/test');
+export const scanEmailAsync = () => api.post('/email/scan-async');
+export const getEmailSenders = () => api.get('/email/senders');
+export const addEmailSender = (value) => api.post('/email/senders', { value });
+export const removeEmailSender = (id) => api.delete(`/email/senders/${id}`);
+export const toggleEmailSender = (id) => api.patch(`/email/senders/${id}/toggle`);
+export const setEmailScanDays = (days) => api.put('/email/scan-days', { scan_days: days });
+
 export default api;
