@@ -16,56 +16,19 @@ def get_quota():
     """Get current API quota usage across all sources."""
     today = datetime.now().strftime("%Y-%m-%d")
     
+    # Only sources that are actually active in the fetch pipeline.
+    # daily_limit -1 = free/unlimited (these don't increment quota, shown for visibility).
     quotas = {
-        "greenhouse": {
-            "used": get_quota_usage("greenhouse", today),
-            "daily_limit": -1,
-            "source": "Greenhouse API (free, no limit)"
-        },
-        "lever": {
-            "used": get_quota_usage("lever", today),
-            "daily_limit": -1,
-            "source": "Lever API (free, no limit)"
-        },
-        "ashby": {
-            "used": get_quota_usage("ashby", today),
-            "daily_limit": -1,
-            "source": "Ashby API (free, no limit)"
-        },
-        "jooble": {
-            "used": get_quota_usage("jooble", today),
-            "daily_limit": -1,
-            "source": "Jooble API (free tier)"
+        # ── Rate-limited / metered sources ──
+        "adzuna": {
+            "used": get_quota_usage("adzuna", today),
+            "daily_limit": 36,
+            "source": "Adzuna India (free key, capped at 36/day)"
         },
         "serpapi": {
             "used": get_quota_usage("serpapi", today),
             "daily_limit": 3,
             "source": "SerpApi Google Jobs (100/month)"
-        },
-        "rss": {
-            "used": get_quota_usage("rss", today),
-            "daily_limit": -1,
-            "source": "Indeed RSS (free)"
-        },
-        "searxng": {
-            "used": get_quota_usage("searxng", today),
-            "daily_limit": -1,
-            "source": "SearxNG Metasearch (free)"
-        },
-        "yahoo": {
-            "used": get_quota_usage("yahoo", today),
-            "daily_limit": -1,
-            "source": "Yahoo Search (free)"
-        },
-        "direct_scrape": {
-            "used": get_quota_usage("direct_scrape", today),
-            "daily_limit": -1,
-            "source": "Career Page URLs (free)"
-        },
-        "bing": {
-            "used": get_quota_usage("bing", today),
-            "daily_limit": 33,
-            "source": "Bing Web Search API"
         },
         "groq_smart": {
             "used": get_quota_usage("groq_smart", today),
@@ -77,7 +40,27 @@ def get_quota():
             "daily_limit": 200,
             "source": "Groq AI — Fast (llama-3.1-8b)"
         },
-        # ── Phase 1 additions ──
+        # ── Free / unlimited sources ──
+        "jooble": {
+            "used": get_quota_usage("jooble", today),
+            "daily_limit": -1,
+            "source": "Jooble API (free tier)"
+        },
+        "searxng": {
+            "used": get_quota_usage("searxng", today),
+            "daily_limit": -1,
+            "source": "SearxNG Metasearch (free)"
+        },
+        "yahoo": {
+            "used": get_quota_usage("yahoo", today),
+            "daily_limit": -1,
+            "source": "Yahoo Search (free)"
+        },
+        "linkedin_guest": {
+            "used": get_quota_usage("linkedin_guest", today),
+            "daily_limit": -1,
+            "source": "LinkedIn Guest (free, no key)"
+        },
         "remoteok": {
             "used": get_quota_usage("remoteok", today),
             "daily_limit": -1,
@@ -93,12 +76,22 @@ def get_quota():
             "daily_limit": -1,
             "source": "Arbeitnow (free, no key — global remote)"
         },
-        "adzuna": {
-            "used": get_quota_usage("adzuna", today),
-            "daily_limit": 8,
-            "source": "Adzuna India (free key, ~250-1000/month)"
+        # ── ATS APIs (free, no key) ──
+        "greenhouse": {
+            "used": get_quota_usage("greenhouse", today),
+            "daily_limit": -1,
+            "source": "Greenhouse API (free, no limit)"
         },
-        # ── Phase 2 additions ──
+        "lever": {
+            "used": get_quota_usage("lever", today),
+            "daily_limit": -1,
+            "source": "Lever API (free, no limit)"
+        },
+        "ashby": {
+            "used": get_quota_usage("ashby", today),
+            "daily_limit": -1,
+            "source": "Ashby API (free, no limit)"
+        },
         "workable": {
             "used": get_quota_usage("workable", today),
             "daily_limit": -1,
