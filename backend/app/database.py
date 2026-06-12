@@ -64,7 +64,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     also_on TEXT DEFAULT '[]',
     ai_score INTEGER DEFAULT NULL,
     ai_reason TEXT DEFAULT '',
-    dismissed_at TIMESTAMP DEFAULT NULL
+    dismissed_at TIMESTAMP DEFAULT NULL,
+    via_email INTEGER DEFAULT 0
 );
 
 -- Multi-level blacklist
@@ -310,10 +311,12 @@ def _ensure_columns(conn):
     CREATE TABLE IF NOT EXISTS won't alter an existing table, so columns
     added after a DB was first created must be backfilled here.
     """
-    # jobs.dismissed_at (Dismiss feature)
+    # jobs.dismissed_at (Dismiss feature) + jobs.via_email (Email scanner)
     cols = [r[1] for r in conn.execute("PRAGMA table_info(jobs)").fetchall()]
     if "dismissed_at" not in cols:
         conn.execute("ALTER TABLE jobs ADD COLUMN dismissed_at TIMESTAMP DEFAULT NULL")
+    if "via_email" not in cols:
+        conn.execute("ALTER TABLE jobs ADD COLUMN via_email INTEGER DEFAULT 0")
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_jobs_dismissed_at ON jobs(dismissed_at)"
     )
@@ -552,8 +555,12 @@ def increment_quota(source, date=None):
 # Phase 2: Refresh Job Tracking (Async Background Jobs)
 # ============================================================
 
-def create_refresh_job(job_id, sources_total=16):
-    """Create a new refresh job record with 'pending' status."""
+def create_refresh_job(job_id, sources_total=0):
+    """Create a new refresh job record with 'pending' status.
+
+    sources_total defaults to 0 so the loader shows its indeterminate state
+    until fetch_all_jobs sets the real layer count (avoids a 16->10 flash).
+    """
     with get_connection() as conn:
         conn.execute("""
             INSERT INTO refresh_jobs (id, status, started_at, sources_total)

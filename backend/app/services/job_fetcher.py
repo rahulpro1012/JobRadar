@@ -620,13 +620,14 @@ def _store_jobs(jobs):
                 conn.execute("""
                     INSERT INTO jobs (
                         title, company, location, source_url, source_domain,
-                        description_snippet, skills_found, posted_date, status
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'new')
+                        description_snippet, skills_found, posted_date, status, via_email
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'new', ?)
                 """, (
                     job["title"], job["company"], job["location"],
                     job["source_url"], job["source_domain"],
                     job["description_snippet"], job.get("skills_found", "[]"),
                     job.get("posted_date", ""),
+                    1 if job.get("via_email") else 0,
                 ))
                 new_count += 1
             except Exception as e:

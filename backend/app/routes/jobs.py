@@ -18,6 +18,7 @@ def get_jobs():
     per_page = request.args.get("per_page", 20, type=int)
 
     include_dismissed = request.args.get("include_dismissed", "false").lower() == "true"
+    via_email = request.args.get("via_email", "false").lower() == "true"
 
     conditions, params = [], []
 
@@ -29,6 +30,8 @@ def get_jobs():
         conditions.append("j.source_domain LIKE ?"); params.append(f"%{source}%")
     if days:
         conditions.append("j.fetched_date >= datetime('now', ?)"); params.append(f"-{days} days")
+    if via_email:
+        conditions.append("j.via_email = 1")
     # Dismiss feature: hide dismissed jobs unless explicitly requested
     if not include_dismissed:
         conditions.append("j.dismissed_at IS NULL")

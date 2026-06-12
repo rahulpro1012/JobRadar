@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
+import { Loader2 } from 'lucide-react';
 import Navbar from './components/Navbar';
 import Sidebar from './components/Sidebar';
 import TabBar from './components/TabBar';
@@ -109,12 +110,13 @@ export default function App() {
         setEmailEnabled(!!es.data?.enabled);
       } catch {}
 
-      // Reconnect to an in-flight refresh (e.g. page reloaded mid-run)
+      // Reconnect to an in-flight job (e.g. page reloaded mid-run).
+      // Use the non-blocking pill so a reload never takes over the screen.
       try {
         const latest = await api.getLatestRefresh();
         const st = latest.data?.status;
         if (st === "running" || st === "pending" || st === "ai_scoring") {
-          startPolling(latest.data.job_id);
+          startPolling(latest.data.job_id, true);
         }
       } catch {}
     } finally {
@@ -129,6 +131,7 @@ export default function App() {
       if (filters.minScore > 0) params.min_score = filters.minScore;
       if (filters.days > 0) params.days = filters.days;
       if (filters.sources?.length > 0) params.source = filters.sources[0];
+      if (filters.viaEmail) params.via_email = true;
       if (showDismissed) params.include_dismissed = true;
       const res = await api.getJobs(params);
       setJobs(res.data.jobs);
@@ -163,19 +166,37 @@ export default function App() {
     }
   };
 
-  // Poll an async refresh job until it completes/fails, driving the loader.
-  const startPolling = (jobId) => {
+  // Poll an async job until it completes/fails.
+  // background=false → full-screen RefreshLoader (used by Refresh).
+  // background=true  → non-blocking; jobs stay visible, a pill shows, and a
+  //                    "Refresh view" toast appears on completion (used by Email scan).
+  const startPolling = (jobId, background = false) => {
     if (pollRef.current) clearInterval(pollRef.current);
-    setRefreshing(true);
+    if (background) setEmailScanning(true);
+    else setRefreshing(true);
 
-    const finish = async (data) => {
+    const cleanup = () => {
       clearInterval(pollRef.current);
       pollRef.current = null;
-      setRefreshing(false);
-      setRefreshProgress(null);
+      if (background) setEmailScanning(false);
+      else { setRefreshing(false); setRefreshProgress(null); }
+    };
 
+    const finish = async (data) => {
+      cleanup();
       if (data?.status === "failed") {
-        toast.error(data.error_message || "Refresh failed");
+        toast.error(data.error_message || (background ? "Email scan failed" : "Refresh failed"));
+        return;
+      }
+      const newN = data?.jobs_new || 0;
+      const aiN = data?.jobs_ai_scored || 0;
+      if (background) {
+        // Don't disrupt what the user is viewing — offer a reload instead.
+        const msg = newN > 0 ? `Email scan done — ${newN} new` : "Email scan done — no new jobs";
+        toast(msg, "success", 8000, {
+          label: "Refresh view",
+          onClick: () => { loadJobs(); loadStats(); },
+        });
       } else {
         await new Promise((r) => setTimeout(r, 400)); // let commits settle
         await Promise.all([loadJobs(), loadStats()]);
@@ -185,8 +206,8 @@ export default function App() {
           window.localStorage.setItem("jobradar-last-refresh", String(now));
         } catch {}
         const parts = [];
-        if (data?.jobs_new > 0) parts.push(`${data.jobs_new} new`);
-        if (data?.jobs_ai_scored > 0) parts.push(`${data.jobs_ai_scored} AI-scored`);
+        if (newN > 0) parts.push(`${newN} new`);
+        if (aiN > 0) parts.push(`${aiN} AI-scored`);
         if (data?.duration_sec) parts.push(`${data.duration_sec}s`);
         toast.success(parts.length > 0 ? parts.join(" · ") : "Refresh complete");
       }
@@ -196,30 +217,26 @@ export default function App() {
       try {
         const res = await api.getRefreshStatus(jobId);
         const d = res.data;
-        setRefreshProgress(d);
+        if (!background) setRefreshProgress(d);
         if (d.status === "completed" || d.status === "failed") {
           await finish(d);
         }
       } catch (err) {
-        // 404 (job gone) or transient error — stop gracefully
-        clearInterval(pollRef.current);
-        pollRef.current = null;
-        setRefreshing(false);
-        setRefreshProgress(null);
+        cleanup();  // 404 (job gone) or transient error — stop gracefully
       }
     };
 
     tick();
-    pollRef.current = setInterval(tick, 2000);
+    pollRef.current = setInterval(tick, background ? 3000 : 2000);
   };
 
   const handleRefresh = async () => {
-    if (refreshing) return;
+    if (refreshing || emailScanning) return;
     setRefreshProgress(null);
     setRefreshing(true);
     try {
       const res = await api.refreshJobsAsync();
-      startPolling(res.data.job_id);
+      startPolling(res.data.job_id, false);
     } catch (err) {
       setRefreshing(false);
       toast.error(err.response?.data?.error || "Refresh failed to start");
@@ -227,14 +244,14 @@ export default function App() {
   };
 
   const handleScanEmail = async () => {
-    if (refreshing) return;
-    setRefreshProgress(null);
-    setRefreshing(true);
+    if (refreshing || emailScanning) return;
+    setEmailScanning(true);
     try {
       const res = await api.scanEmailAsync();
-      startPolling(res.data.job_id);
+      toast.info("Scanning your job-alert emails in the background…");
+      startPolling(res.data.job_id, true);
     } catch (err) {
-      setRefreshing(false);
+      setEmailScanning(false);
       toast.error(err.response?.data?.error || "Email scan failed to start");
     }
   };
@@ -362,6 +379,8 @@ export default function App() {
         onRefresh={handleRefresh}
         onScanEmail={handleScanEmail}
         emailEnabled={emailEnabled}
+        scanning={emailScanning}
+        busy={refreshing || emailScanning}
         onSettingsClick={() => {
           setSettingsTab("quota");
           setSettingsOpen(true);
@@ -408,6 +427,7 @@ export default function App() {
                 showDismissed={showDismissed}
                 onToggleDismissed={() => { setShowDismissed((v) => !v); setCurrentPage(1); }}
                 dismissedCount={stats?.dismissed || 0}
+                availableSources={stats?.by_source || {}}
               />
             )}
           </div>
@@ -423,6 +443,7 @@ export default function App() {
               showDismissed={showDismissed}
               onToggleDismissed={() => { setShowDismissed((v) => !v); setCurrentPage(1); }}
               dismissedCount={stats?.dismissed || 0}
+              availableSources={stats?.by_source || {}}
             />
           </div>
 
@@ -596,6 +617,14 @@ export default function App() {
         initialTab={settingsTab}
         onJobsChanged={() => { loadJobs(); loadStats(); }}
       />
+      {/* Background email-scan indicator (non-blocking) */}
+      {emailScanning && (
+        <div className="fixed bottom-4 left-4 z-40 flex items-center gap-2 px-3 py-2 rounded-xl bg-themed-card border border-themed shadow-lg animate-fade-in">
+          <Loader2 className="w-4 h-4 animate-spin text-brand-500" />
+          <span className="text-sm t-secondary">Scanning email…</span>
+        </div>
+      )}
+
       <ToastContainer />
       <ScrollToTop />
     </div>

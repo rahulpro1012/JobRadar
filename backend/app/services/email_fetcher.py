@@ -29,7 +29,9 @@ logger = logging.getLogger(__name__)
 
 IMAP_HOST = "imap.gmail.com"
 MAX_EMAILS_PER_SCAN = 20      # cap messages processed per scan
-GAP_BETWEEN_EMAILS = 1.5      # seconds between Groq extraction calls (TPM courtesy)
+EMAILS_PER_CALL = 5           # batch N emails into one Groq call (fewer 429s)
+BODY_TRUNCATE = 1000          # chars of each email body sent to Groq
+CHUNK_GAP = 2.0               # seconds between chunk calls (TPM courtesy)
 
 # Query params to drop when canonicalizing tracking-wrapped alert links
 _TRACKING_PARAMS = {
@@ -160,28 +162,36 @@ def _domain_of(url):
         return ""
 
 
-_EXTRACT_SYSTEM = """You extract job postings from a job-alert email.
-Return ONLY a valid JSON array — never markdown, never prose.
+_EXTRACT_SYSTEM = """You extract job postings from one or more job-alert emails.
+Each email is delimited by a line like "--- EMAIL N ---".
+Return ONLY a valid JSON array (never markdown, never prose) of ALL jobs found across ALL emails.
 Each element: {"title": str, "company": str, "location": str, "url": str}.
 - "url" must be the direct link to the job/application.
-- If the email lists multiple jobs, return all of them.
-- If there are no real job postings, return [].
+- Include every distinct job. If an email has no real job, contribute nothing for it.
+- If there are no jobs at all, return [].
 Do not invent jobs. Keep titles/companies as written."""
 
 
-def _extract_jobs_from_email(subject, text):
-    """One Groq call per email → list of {title, company, location, url}."""
-    prompt = f"Subject: {subject}\n\nEmail body:\n{text}"
+def _extract_jobs_from_chunk(chunk):
+    """One Groq call for a batch of emails. Returns (jobs_list, success).
+
+    success=False only when Groq gave no response (429-exhausted / error), so
+    the caller can avoid marking those emails seen and retry them next scan.
+    """
+    parts = []
+    for i, it in enumerate(chunk, 1):
+        parts.append(f"--- EMAIL {i} ---\nSubject: {it['subject']}\n{it['text']}")
+    prompt = "\n\n".join(parts)
     result = _call_groq(prompt, _EXTRACT_SYSTEM, model=FAST_MODEL, max_tokens=1500, temperature=0.1)
     if not result:
-        return []
+        return [], False
     try:
         cleaned = _clean_groq_json(result)
         data = json.loads(cleaned)
-        return data if isinstance(data, list) else []
+        return (data if isinstance(data, list) else []), True
     except Exception as e:
-        logger.debug(f"[email] extraction parse failed: {e}")
-        return []
+        logger.debug(f"[email] chunk parse failed: {e}")
+        return [], True  # response came back but unparseable — don't reprocess
 
 
 def fetch_email_jobs():
@@ -222,7 +232,9 @@ def fetch_email_jobs():
         ids = data[0].split()[-MAX_EMAILS_PER_SCAN:]  # most recent N
         logger.info(f"[email] {len(ids)} candidate messages")
 
-        for idx, num in enumerate(ids):
+        # ── Collect candidate emails (skip already-seen) ──
+        items = []
+        for num in ids:
             try:
                 typ, msgdata = M.fetch(num, "(RFC822)")
                 if typ != "OK" or not msgdata or not msgdata[0]:
@@ -237,36 +249,43 @@ def fetch_email_jobs():
                     if mid:
                         processed_mids.append(mid)
                     continue
-
-                extracted = _extract_jobs_from_email(subject, body[:4000])
-                for j in extracted:
-                    url = (j.get("url") or "").strip()
-                    title = (j.get("title") or "").strip()
-                    if not url or not title:
-                        continue
-                    canon = _canonicalize_url(url)
-                    if canon in seen_urls:
-                        continue
-                    seen_urls.add(canon)
-                    jobs.append({
-                        "title": title[:150],
-                        "company": (j.get("company") or "Unknown")[:100],
-                        "location": (j.get("location") or "")[:100],
-                        "source_url": canon,
-                        "source_domain": _domain_of(canon) or "email",
-                        "description_snippet": (f"From email alert: {subject}")[:300],
-                        "posted_date": "",
-                        "skills_found": json.dumps([]),
-                    })
-
-                if mid:
-                    processed_mids.append(mid)
-
-                if idx < len(ids) - 1:
-                    time.sleep(GAP_BETWEEN_EMAILS)  # spacing for Groq TPM
+                items.append({"mid": mid, "subject": subject, "text": body[:BODY_TRUNCATE]})
             except Exception as e:
                 logger.debug(f"[email] message error: {e}")
                 continue
+
+        # ── Extract in batches to minimize Groq calls / 429s ──
+        chunks = [items[i:i + EMAILS_PER_CALL] for i in range(0, len(items), EMAILS_PER_CALL)]
+        logger.info(f"[email] extracting {len(items)} emails in {len(chunks)} batch(es)")
+        for ci, chunk in enumerate(chunks):
+            extracted, ok = _extract_jobs_from_chunk(chunk)
+            if not ok:
+                continue  # leave these emails unmarked → retry next scan
+            for j in extracted:
+                url = (j.get("url") or "").strip()
+                title = (j.get("title") or "").strip()
+                if not url or not title:
+                    continue
+                canon = _canonicalize_url(url)
+                if canon in seen_urls:
+                    continue
+                seen_urls.add(canon)
+                jobs.append({
+                    "title": title[:150],
+                    "company": (j.get("company") or "Unknown")[:100],
+                    "location": (j.get("location") or "")[:100],
+                    "source_url": canon,
+                    "source_domain": _domain_of(canon) or "email",
+                    "description_snippet": "From email alert",
+                    "posted_date": "",
+                    "skills_found": json.dumps([]),
+                    "via_email": 1,
+                })
+            for it in chunk:
+                if it["mid"]:
+                    processed_mids.append(it["mid"])
+            if ci < len(chunks) - 1:
+                time.sleep(CHUNK_GAP)
 
         logger.info(f"[email] extracted {len(jobs)} jobs from {len(processed_mids)} emails")
         return jobs, processed_mids

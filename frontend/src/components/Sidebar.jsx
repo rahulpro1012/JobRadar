@@ -1,14 +1,6 @@
-import { Filter, Ban, ChevronDown, ChevronUp, EyeOff, Eye } from 'lucide-react';
+import { Filter, Ban, ChevronDown, ChevronUp, EyeOff, Eye, Mail } from 'lucide-react';
 import { useState } from 'react';
-
-const SOURCES = [
-  { key: 'greenhouse.io', label: 'Greenhouse' },
-  { key: 'lever.co', label: 'Lever' },
-  { key: 'ashbyhq.com', label: 'Ashby' },
-  { key: 'naukri.com', label: 'Naukri' },
-  { key: 'linkedin.com', label: 'LinkedIn' },
-  { key: 'indeed.co.in', label: 'Indeed' },
-];
+import { sourceName } from '../utils/helpers';
 
 const DATE_OPTIONS = [
   { value: 1, label: 'Today' },
@@ -21,8 +13,15 @@ const DATE_OPTIONS = [
 export default function Sidebar({
   filters, onFilterChange, blacklistCount, onManageBlacklist,
   showDismissed = false, onToggleDismissed, dismissedCount = 0,
+  availableSources = {},
 }) {
   const [showFilters, setShowFilters] = useState(true);
+
+  // Data-driven source list from actual jobs (stats.by_source), most jobs first
+  const sources = Object.entries(availableSources)
+    .filter(([domain]) => domain)
+    .sort((a, b) => b[1] - a[1])
+    .map(([domain, count]) => ({ key: domain, label: sourceName(domain), count }));
 
   const handleSourceToggle = (sourceKey) => {
     const current = filters.sources || [];
@@ -43,19 +42,31 @@ export default function Sidebar({
 
         {showFilters && (
           <>
-            <div>
-              <p className="text-xs font-medium t-faint uppercase tracking-wider mb-2">Source</p>
-              <div className="space-y-1.5">
-                {SOURCES.map((src) => (
-                  <label key={src.key} className="flex items-center gap-2 cursor-pointer text-sm t-muted hover:t-primary">
-                    <input type="checkbox" checked={(filters.sources || []).includes(src.key)}
-                      onChange={() => handleSourceToggle(src.key)}
-                      className="rounded border-gray-400 dark:border-surface-600 text-brand-500 focus:ring-brand-500/30" />
-                    {src.label}
-                  </label>
-                ))}
+            {/* Email-only toggle */}
+            <label className="flex items-center gap-2 cursor-pointer text-sm t-muted hover:t-primary">
+              <input type="checkbox" checked={!!filters.viaEmail}
+                onChange={() => onFilterChange({ ...filters, viaEmail: !filters.viaEmail })}
+                className="rounded text-brand-500 focus:ring-brand-500/30" />
+              <Mail className="w-3.5 h-3.5 text-brand-500" />
+              <span>From email alerts only</span>
+            </label>
+
+            {sources.length > 0 && (
+              <div>
+                <p className="text-xs font-medium t-faint uppercase tracking-wider mb-2">Source</p>
+                <div className="space-y-1.5 max-h-56 overflow-y-auto pr-1">
+                  {sources.map((src) => (
+                    <label key={src.key} className="flex items-center gap-2 cursor-pointer text-sm t-muted hover:t-primary">
+                      <input type="checkbox" checked={(filters.sources || []).includes(src.key)}
+                        onChange={() => handleSourceToggle(src.key)}
+                        className="rounded text-brand-500 focus:ring-brand-500/30 shrink-0" />
+                      <span className="flex-1 truncate">{src.label}</span>
+                      <span className="text-xs t-faint">{src.count}</span>
+                    </label>
+                  ))}
+                </div>
               </div>
-            </div>
+            )}
 
             <div>
               <p className="text-xs font-medium t-faint uppercase tracking-wider mb-2">Min. Match Score</p>
