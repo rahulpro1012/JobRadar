@@ -49,6 +49,7 @@ export default function App() {
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [showDismissed, setShowDismissed] = useState(false);
   const [emailEnabled, setEmailEnabled] = useState(false);
+  const [emailScanning, setEmailScanning] = useState(false);
 
   const fileRef = useRef(null);
   const pollRef = useRef(null);
