@@ -11,24 +11,32 @@ import {
   ToggleRight,
   RotateCcw,
   Activity,
+  Database,
+  Save,
+  AlertTriangle,
 } from "lucide-react";
 import * as api from "../services/api";
-import { quotaPercent, sourceHealthColor } from "../utils/helpers";
+import { quotaPercent, sourceHealthColor, sourceName } from "../utils/helpers";
 
 const SETTING_TABS = [
   { key: "quota", label: "API Quota", icon: BarChart3 },
   { key: "sources", label: "Sources", icon: Activity },
   { key: "companies", label: "Companies", icon: Building2 },
   { key: "blacklist", label: "Blacklist", icon: Ban },
+  { key: "managejobs", label: "Manage Jobs", icon: Database },
   { key: "preferences", label: "Preferences", icon: SlidersHorizontal },
 ];
 
-export default function SettingsPanel({ isOpen, onClose, initialTab }) {
+export default function SettingsPanel({ isOpen, onClose, initialTab, onJobsChanged }) {
   const [tab, setTab] = useState(initialTab || "quota");
   const [quota, setQuota] = useState(null);
   const [sourceHealth, setSourceHealth] = useState([]);
   const [companies, setCompanies] = useState([]);
   const [blacklist, setBlacklist] = useState({ entries: [], grouped: {} });
+  const [retentionDays, setRetentionDays] = useState(15);
+  const [jobSources, setJobSources] = useState({});
+  const [purgeStatus, setPurgeStatus] = useState("archived");
+  const [purgeSource, setPurgeSource] = useState("");
   const [newCompany, setNewCompany] = useState({
     company_name: "",
     careers_url: "",
@@ -47,6 +55,13 @@ export default function SettingsPanel({ isOpen, onClose, initialTab }) {
       } else if (tab === "sources") {
         const r = await api.getSourceHealth();
         setSourceHealth(r.data.sources || []);
+      } else if (tab === "managejobs") {
+        const [ret, stats] = await Promise.all([
+          api.getRetention(),
+          api.getJobStats(),
+        ]);
+        setRetentionDays(ret.data.retention_days ?? 15);
+        setJobSources(stats.data.by_source || {});
       } else if (tab === "companies") {
         const r = await api.getCompanies();
         setCompanies(r.data.companies);
@@ -76,6 +91,28 @@ export default function SettingsPanel({ isOpen, onClose, initialTab }) {
       loadData();
     } catch (err) {
       alert(err.response?.data?.error || "Failed");
+    }
+  };
+
+  const handleSaveRetention = async () => {
+    try {
+      const r = await api.setRetention(parseInt(retentionDays) || 0);
+      setRetentionDays(r.data.retention_days);
+      alert(`Retention set to ${r.data.retention_days} days.`);
+    } catch (err) {
+      alert(err.response?.data?.error || "Failed to save retention");
+    }
+  };
+
+  const handlePurge = async (criteria, confirmMsg) => {
+    if (confirmMsg && !window.confirm(confirmMsg)) return;
+    try {
+      const r = await api.purgeJobs(criteria);
+      alert(`Deleted ${r.data.deleted} jobs.`);
+      onJobsChanged?.();
+      loadData();
+    } catch (err) {
+      alert(err.response?.data?.error || "Purge failed");
     }
   };
 
@@ -351,6 +388,120 @@ export default function SettingsPanel({ isOpen, onClose, initialTab }) {
                   </div>
                 );
               })}
+            </div>
+          )}
+
+          {/* Manage Jobs */}
+          {tab === "managejobs" && (
+            <div className="space-y-6">
+              {/* Retention window */}
+              <div>
+                <p className="text-sm font-semibold t-secondary mb-1">Auto-cleanup window</p>
+                <p className="text-xs t-faint mb-2">
+                  Jobs older than this (by fetched date) are deleted at the end of every refresh. Set 0 to disable.
+                </p>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number" min="0" max="365"
+                    className="input w-24"
+                    value={retentionDays}
+                    onChange={(e) => setRetentionDays(e.target.value)}
+                  />
+                  <span className="text-sm t-muted">days</span>
+                  <button onClick={handleSaveRetention} className="btn-primary text-xs ml-2">
+                    <Save className="w-3.5 h-3.5" /> Save
+                  </button>
+                </div>
+              </div>
+
+              {/* Purge older than now */}
+              <div className="pt-4 border-t border-themed">
+                <p className="text-sm font-semibold t-secondary mb-2">One-off cleanup</p>
+                <button
+                  onClick={() => handlePurge(
+                    { older_than_days: parseInt(retentionDays) || 15 },
+                    `Delete all jobs older than ${parseInt(retentionDays) || 15} days now?`
+                  )}
+                  className="btn-secondary text-xs"
+                >
+                  <Trash2 className="w-3.5 h-3.5" /> Purge older than {parseInt(retentionDays) || 15} days now
+                </button>
+              </div>
+
+              {/* Clear by status */}
+              <div className="pt-4 border-t border-themed">
+                <p className="text-sm font-semibold t-secondary mb-2">Clear by status</p>
+                <div className="flex gap-2">
+                  <select
+                    className="input w-40"
+                    value={purgeStatus}
+                    onChange={(e) => setPurgeStatus(e.target.value)}
+                  >
+                    {["new", "archived", "skipped", "dismissed", "saved", "applied"].map((s) => (
+                      <option key={s} value={s}>{s}</option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={() => handlePurge(
+                      { status: purgeStatus },
+                      `Delete all '${purgeStatus}' jobs?`
+                    )}
+                    className="btn-danger text-xs"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" /> Clear
+                  </button>
+                </div>
+              </div>
+
+              {/* Clear by source */}
+              {Object.keys(jobSources).length > 0 && (
+                <div className="pt-4 border-t border-themed">
+                  <p className="text-sm font-semibold t-secondary mb-2">Clear by source</p>
+                  <div className="flex gap-2">
+                    <select
+                      className="input flex-1"
+                      value={purgeSource}
+                      onChange={(e) => setPurgeSource(e.target.value)}
+                    >
+                      <option value="">Select a source…</option>
+                      {Object.entries(jobSources).map(([domain, count]) => (
+                        <option key={domain} value={domain}>
+                          {sourceName(domain)} ({count})
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      disabled={!purgeSource}
+                      onClick={() => handlePurge(
+                        { source: purgeSource },
+                        `Delete all jobs from ${sourceName(purgeSource)}?`
+                      )}
+                      className="btn-danger text-xs"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" /> Clear
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Clear ALL */}
+              <div className="pt-4 border-t border-themed">
+                <div className="flex items-start gap-2 mb-2">
+                  <AlertTriangle className="w-4 h-4 text-red-500 mt-0.5" />
+                  <p className="text-xs t-muted">
+                    Danger zone — permanently delete every job (including saved &amp; applied).
+                  </p>
+                </div>
+                <button
+                  onClick={() => handlePurge(
+                    { all: true, confirm: true },
+                    "Delete ALL jobs? This cannot be undone."
+                  )}
+                  className="btn-danger text-xs"
+                >
+                  <Trash2 className="w-3.5 h-3.5" /> Clear ALL jobs
+                </button>
+              </div>
             </div>
           )}
 

@@ -572,6 +572,7 @@ export default function App() {
         isOpen={settingsOpen}
         onClose={() => setSettingsOpen(false)}
         initialTab={settingsTab}
+        onJobsChanged={() => { loadJobs(); loadStats(); }}
       />
       <ToastContainer />
       <ScrollToTop />

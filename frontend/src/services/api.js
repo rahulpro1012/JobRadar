@@ -65,6 +65,11 @@ export const undismissJob = (id) => api.post(`/jobs/${id}/undismiss`);
 export const bulkDismissJobs = (jobIds) => api.post('/jobs/bulk-dismiss', { job_ids: jobIds });
 export const bulkUndismissJobs = (jobIds) => api.post('/jobs/bulk-undismiss', { job_ids: jobIds });
 
+// Retention + manual job-table management
+export const getRetention = () => api.get('/jobs/retention');
+export const setRetention = (days) => api.put('/jobs/retention', { retention_days: days });
+export const purgeJobs = (criteria) => api.post('/jobs/purge', criteria);
+
 // ============================================================
 // Blacklist
 // ============================================================

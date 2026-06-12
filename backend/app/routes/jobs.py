@@ -187,6 +187,67 @@ def bulk_undismiss_jobs():
     return jsonify({"success": True, "undismissed_count": cur.rowcount, "job_ids": job_ids}), 200
 
 
+# ============================================================
+# Retention + manual job-table management
+# ============================================================
+
+@jobs_bp.route("/jobs/retention", methods=["GET"])
+def get_retention():
+    """Get the auto-cleanup retention window (days)."""
+    from app.database import get_setting
+    try:
+        days = int(get_setting("retention_days", 15))
+    except (TypeError, ValueError):
+        days = 15
+    return jsonify({"retention_days": days})
+
+
+@jobs_bp.route("/jobs/retention", methods=["PUT"])
+def set_retention():
+    """Set the auto-cleanup retention window (days). 0 disables auto-purge."""
+    from app.database import set_setting
+    data = request.get_json() or {}
+    try:
+        days = int(data.get("retention_days"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "retention_days must be an integer"}), 400
+    if days < 0 or days > 365:
+        return jsonify({"error": "retention_days must be between 0 and 365"}), 400
+    set_setting("retention_days", days)
+    return jsonify({"retention_days": days})
+
+
+@jobs_bp.route("/jobs/purge", methods=["POST"])
+def purge_jobs_endpoint():
+    """Manual purge. Body one of:
+       {"older_than_days": N} | {"status": "..."} | {"source": "..."} | {"all": true, "confirm": true}
+    """
+    from app.services.job_fetcher import purge_jobs
+    data = request.get_json() or {}
+
+    if data.get("all"):
+        if not data.get("confirm"):
+            return jsonify({"error": "Clearing ALL jobs requires confirm: true"}), 400
+        deleted = purge_jobs({"all": True})
+    elif "older_than_days" in data:
+        try:
+            days = int(data["older_than_days"])
+        except (TypeError, ValueError):
+            return jsonify({"error": "older_than_days must be an integer"}), 400
+        deleted = purge_jobs({"older_than_days": days})
+    elif data.get("status"):
+        valid = {"new", "saved", "applied", "skipped", "archived"}
+        if data["status"] not in valid:
+            return jsonify({"error": "Invalid status"}), 400
+        deleted = purge_jobs({"status": data["status"]})
+    elif data.get("source"):
+        deleted = purge_jobs({"source": data["source"]})
+    else:
+        return jsonify({"error": "No valid purge criteria provided"}), 400
+
+    return jsonify({"deleted": deleted})
+
+
 @jobs_bp.route("/jobs/<int:job_id>/status", methods=["PATCH"])
 def update_job_status(job_id):
     data = request.get_json()
@@ -355,6 +416,13 @@ def refresh_jobs():
                         logger.info(f"C1: Analyzed {ai_scored} jobs with structured reasoning")
         except Exception as e:
             logger.info(f"AI analysis skipped: {e}")
+
+        # ── Retention: purge stale jobs to keep the table fresh ──
+        try:
+            from app.services.job_fetcher import purge_old_jobs
+            purge_old_jobs()
+        except Exception as e:
+            logger.warning(f"Retention purge failed: {e}")
 
         return jsonify({
             "message": f"Found {new_count} new jobs",

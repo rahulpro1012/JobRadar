@@ -638,6 +638,65 @@ def _store_jobs(jobs):
 
 
 # ============================================================
+# Retention / cleanup
+# ============================================================
+
+def purge_old_jobs(days=None):
+    """Delete jobs older than `days` (by fetched_date). Defaults to the
+    retention_days app setting (15 if unset). FK ON DELETE CASCADE cleans up
+    job_ai_analysis + user_signals rows. Returns the number deleted."""
+    from app.database import get_setting
+    if days is None:
+        try:
+            days = int(get_setting("retention_days", 15))
+        except (TypeError, ValueError):
+            days = 15
+    if days <= 0:
+        return 0
+    with get_connection() as conn:
+        cur = conn.execute(
+            "DELETE FROM jobs WHERE fetched_date < datetime('now', ?)",
+            (f"-{days} days",),
+        )
+        conn.commit()
+        deleted = cur.rowcount
+    if deleted:
+        logger.info(f"Retention: purged {deleted} jobs older than {days} days")
+    return deleted
+
+
+def purge_jobs(criteria):
+    """Manual purge. criteria is one of:
+      {"older_than_days": N} | {"status": "..."} | {"source": "..."} | {"all": True}
+    Returns the number of jobs deleted."""
+    criteria = criteria or {}
+    with get_connection() as conn:
+        if criteria.get("all"):
+            cur = conn.execute("DELETE FROM jobs")
+        elif "older_than_days" in criteria:
+            days = int(criteria["older_than_days"])
+            cur = conn.execute(
+                "DELETE FROM jobs WHERE fetched_date < datetime('now', ?)",
+                (f"-{days} days",),
+            )
+        elif criteria.get("status"):
+            cur = conn.execute(
+                "DELETE FROM jobs WHERE status = ?", (criteria["status"],)
+            )
+        elif criteria.get("source"):
+            cur = conn.execute(
+                "DELETE FROM jobs WHERE source_domain LIKE ?",
+                (f"%{criteria['source']}%",),
+            )
+        else:
+            return 0
+        conn.commit()
+        deleted = cur.rowcount
+    logger.info(f"Manual purge {criteria} → deleted {deleted} jobs")
+    return deleted
+
+
+# ============================================================
 # Phase 2: Async Background Refresh (Background Jobs + Polling)
 # ============================================================
 
@@ -751,6 +810,12 @@ def _run_refresh_background(job_id, profile, config):
                     ai_count = len(analyses)
                     logger.info(f"[RefreshJob {job_id}] C1: Analyzed {ai_count} jobs with structured reasoning")
             update_refresh_job(job_id, jobs_ai_scored=ai_count)
+
+        # === Retention: purge stale jobs to keep the table fresh ===
+        try:
+            purge_old_jobs()
+        except Exception as e:
+            logger.warning(f"[RefreshJob {job_id}] retention purge failed: {e}")
 
         # === Completion ===
         logger.info(f"[RefreshJob {job_id}] Refresh complete!")

@@ -195,6 +195,12 @@ CREATE TABLE IF NOT EXISTS query_yield_history (
     UNIQUE(query, source, location, refreshed_at)
 );
 
+-- Generic key-value app settings (retention_days, email scan_days, etc.)
+CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT
+);
+
 -- C1: Job AI analysis with structured reasoning (apply/skip reasons, red flags)
 CREATE TABLE IF NOT EXISTS job_ai_analysis (
     job_id INTEGER PRIMARY KEY,
@@ -391,6 +397,29 @@ def execute_many(sql, params_list):
     """Execute a query with multiple parameter sets."""
     with get_connection() as conn:
         conn.executemany(sql, params_list)
+        conn.commit()
+
+
+# ============================================================
+# App Settings (generic key-value)
+# ============================================================
+
+def get_setting(key, default=None):
+    """Get an app_settings value (string), or default if unset."""
+    row = execute_query(
+        "SELECT value FROM app_settings WHERE key = ?", (key,), fetch_one=True
+    )
+    return row["value"] if row else default
+
+
+def set_setting(key, value):
+    """Upsert an app_settings value."""
+    with get_connection() as conn:
+        conn.execute(
+            """INSERT INTO app_settings (key, value) VALUES (?, ?)
+               ON CONFLICT(key) DO UPDATE SET value = excluded.value""",
+            (key, str(value)),
+        )
         conn.commit()
 
 
