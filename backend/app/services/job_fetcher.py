@@ -837,6 +837,139 @@ def _run_refresh_background(job_id, profile, config):
         )
 
 
+def _c1_analyze_and_store(top_jobs, profile):
+    """Run C1 structured analysis on the given job rows; update jobs + upsert
+    job_ai_analysis (same blend/format as the refresh pipeline). Returns count."""
+    if not top_jobs:
+        return 0
+    from app.services.ai_agent import analyze_jobs_batch
+    analyses = analyze_jobs_batch(top_jobs, profile, batch_size=10)
+    if not analyses:
+        return 0
+    with get_connection() as conn:
+        for analysis in analyses:
+            jid = analysis["job_id"]
+            ai_score = analysis["score"]
+            base = conn.execute("SELECT match_score FROM jobs WHERE id = ?", (jid,)).fetchone()
+            if not base:
+                continue
+            blended = int(base[0] * 0.6 + ai_score * 0.4)
+            conn.execute(
+                "UPDATE jobs SET adjusted_score = ?, ai_score = ?, ai_reason = ? WHERE id = ?",
+                (blended, ai_score, analysis["fit_summary"], jid),
+            )
+            try:
+                conn.execute(
+                    """INSERT INTO job_ai_analysis
+                       (job_id, ai_score, apply_reasons, skip_reasons, fit_summary, red_flags, model_used)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)
+                       ON CONFLICT(job_id) DO UPDATE SET
+                       ai_score = excluded.ai_score,
+                       apply_reasons = excluded.apply_reasons,
+                       skip_reasons = excluded.skip_reasons,
+                       fit_summary = excluded.fit_summary,
+                       red_flags = excluded.red_flags,
+                       analyzed_at = datetime('now')""",
+                    (jid, ai_score,
+                     json.dumps(analysis.get("apply_reasons", [])),
+                     json.dumps(analysis.get("skip_reasons", [])),
+                     analysis["fit_summary"],
+                     json.dumps(analysis.get("red_flags", [])),
+                     "llama-3.1-8b-instant"),
+                )
+            except Exception as e:
+                logger.debug(f"C1: failed to store analysis for job {jid}: {e}")
+        conn.commit()
+    return len(analyses)
+
+
+# ============================================================
+# Feature 1: on-demand Gmail job-alert scan (reuses refresh_jobs infra)
+# ============================================================
+
+def trigger_email_scan(profile, config):
+    """Kick off an async email scan. Returns job_id for the frontend to poll
+    (same refresh_jobs table + poll endpoint as a normal refresh)."""
+    from app.database import create_refresh_job
+    job_id = str(uuid.uuid4())
+    create_refresh_job(job_id, sources_total=1)
+    thread = threading.Thread(
+        target=_run_email_scan_background, args=(job_id, profile, config), daemon=True
+    )
+    thread.start()
+    return job_id
+
+
+def _run_email_scan_background(job_id, profile, config):
+    """Background worker: scan Gmail alerts → store → blacklist+score → C1."""
+    from app.database import update_refresh_job, mark_email_seen, set_setting
+
+    try:
+        update_refresh_job(job_id, status='running')
+
+        # === Stage 1: scan + extract ===
+        from app.services.email_fetcher import fetch_email_jobs
+        jobs, processed_mids = fetch_email_jobs()
+        update_refresh_job(
+            job_id, sources_total=1, sources_done=1,
+            jobs_fetched=len(jobs), per_source_json=json.dumps({"email": len(jobs)}),
+        )
+
+        new_count = _store_jobs(jobs)
+        for mid in processed_mids:
+            mark_email_seen(mid)
+        update_refresh_job(job_id, jobs_new=new_count)
+
+        # === Stage 2: blacklist + rule scoring (DB-based) ===
+        from app.services.blacklist_engine import apply_blacklist
+        from app.services.scorer import score_all_jobs
+        apply_blacklist()
+        score_all_jobs(profile)
+
+        # === Stage 3: C1 on the freshly imported email jobs ===
+        update_refresh_job(job_id, status='ai_scoring')
+        ai_count = 0
+        from app.services.ai_agent import is_ai_enabled
+        if is_ai_enabled() and jobs:
+            urls = [j["source_url"] for j in jobs]
+            placeholders = ",".join("?" * len(urls))
+            top_jobs = execute_query(
+                f"""SELECT id, title, company, location, description_snippet, match_score
+                    FROM jobs WHERE source_url IN ({placeholders}) AND status = 'new'
+                    ORDER BY match_score DESC LIMIT 15""",
+                urls, fetch_all=True,
+            )
+            ai_count = _c1_analyze_and_store(top_jobs, profile)
+            logger.info(f"[EmailScan {job_id}] C1: analyzed {ai_count} email jobs")
+        update_refresh_job(job_id, jobs_ai_scored=ai_count)
+
+        # === Retention purge (same as refresh) ===
+        try:
+            purge_old_jobs()
+        except Exception as e:
+            logger.warning(f"[EmailScan {job_id}] retention purge failed: {e}")
+
+        try:
+            set_setting("email_last_scan", datetime.utcnow().isoformat())
+            set_setting("email_last_imported", new_count)
+        except Exception:
+            pass
+
+        elapsed = int(_time_module.time() - datetime.fromisoformat(get_refresh_job(job_id)["started_at"]).timestamp())
+        update_refresh_job(
+            job_id, status='completed', duration_sec=elapsed,
+            completed_at=datetime.utcnow().isoformat(),
+        )
+        logger.info(f"[EmailScan {job_id}] complete — {new_count} new, {ai_count} analyzed")
+
+    except Exception as e:
+        logger.exception(f"[EmailScan {job_id}] failed: {e}")
+        update_refresh_job(
+            job_id, status='failed', error_message=str(e)[:500],
+            completed_at=datetime.utcnow().isoformat(),
+        )
+
+
 def get_refresh_job(job_id):
     """Fetch refresh job details (for polling endpoint)."""
     from app.database import get_refresh_job as db_get_refresh_job

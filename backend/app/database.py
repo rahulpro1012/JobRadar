@@ -201,6 +201,20 @@ CREATE TABLE IF NOT EXISTS app_settings (
     value TEXT
 );
 
+-- Feature 1: editable sender allowlist for the Gmail job-alert scanner
+CREATE TABLE IF NOT EXISTS email_senders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    value TEXT NOT NULL UNIQUE,
+    enabled INTEGER DEFAULT 1,
+    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Feature 1: processed email message-ids (avoid re-importing the same alert)
+CREATE TABLE IF NOT EXISTS email_seen (
+    message_id TEXT PRIMARY KEY,
+    seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- C1: Job AI analysis with structured reasoning (apply/skip reasons, red flags)
 CREATE TABLE IF NOT EXISTS job_ai_analysis (
     job_id INTEGER PRIMARY KEY,
@@ -270,7 +284,24 @@ def init_db(app_config):
         conn.executescript(SCHEMA_SQL)
         _ensure_columns(conn)
         _seed_default_companies(conn)
+        _seed_email_senders(conn)
         conn.commit()
+
+
+DEFAULT_EMAIL_SENDERS = [
+    "linkedin.com", "naukri.com", "indeed.com", "glassdoor.com",
+    "instahyre.com", "hirist.com", "cutshort.io",
+]
+
+
+def _seed_email_senders(conn):
+    """Seed the job-alert sender allowlist if empty (Feature 1)."""
+    count = conn.execute("SELECT COUNT(*) FROM email_senders").fetchone()[0]
+    if count == 0:
+        for value in DEFAULT_EMAIL_SENDERS:
+            conn.execute(
+                "INSERT OR IGNORE INTO email_senders (value) VALUES (?)", (value,)
+            )
 
 
 def _ensure_columns(conn):
@@ -419,6 +450,70 @@ def set_setting(key, value):
             """INSERT INTO app_settings (key, value) VALUES (?, ?)
                ON CONFLICT(key) DO UPDATE SET value = excluded.value""",
             (key, str(value)),
+        )
+        conn.commit()
+
+
+# ============================================================
+# Feature 1: email sender allowlist + seen-message tracking
+# ============================================================
+
+def list_email_senders(enabled_only=False):
+    """Return sender allowlist rows. If enabled_only, only enabled ones."""
+    sql = "SELECT id, value, enabled, added_at FROM email_senders"
+    if enabled_only:
+        sql += " WHERE enabled = 1"
+    sql += " ORDER BY value"
+    return execute_query(sql, fetch_all=True)
+
+
+def add_email_sender(value):
+    """Add a sender domain/address to the allowlist (idempotent)."""
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO email_senders (value) VALUES (?)",
+            (value.strip().lower(),),
+        )
+        conn.commit()
+
+
+def remove_email_sender(sender_id):
+    with get_connection() as conn:
+        cur = conn.execute("DELETE FROM email_senders WHERE id = ?", (sender_id,))
+        conn.commit()
+        return cur.rowcount
+
+
+def toggle_email_sender(sender_id):
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT enabled FROM email_senders WHERE id = ?", (sender_id,)
+        ).fetchone()
+        if not row:
+            return None
+        new_val = 0 if row["enabled"] else 1
+        conn.execute(
+            "UPDATE email_senders SET enabled = ? WHERE id = ?", (new_val, sender_id)
+        )
+        conn.commit()
+        return bool(new_val)
+
+
+def is_email_seen(message_id):
+    if not message_id:
+        return False
+    row = execute_query(
+        "SELECT 1 FROM email_seen WHERE message_id = ?", (message_id,), fetch_one=True
+    )
+    return row is not None
+
+
+def mark_email_seen(message_id):
+    if not message_id:
+        return
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO email_seen (message_id) VALUES (?)", (message_id,)
         )
         conn.commit()
 

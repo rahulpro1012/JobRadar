@@ -39,6 +39,11 @@ class Config:
     # Self-hosted SearxNG URL (deploy searxng-jobradar repo to Render free tier)
     # When set, this is used as the primary SearxNG instance (replaces flaky public ones)
     SEARXNG_URL = os.environ.get("SEARXNG_URL", "")
+
+    # Feature 1: Gmail job-alert scanner (IMAP app password — never stored in DB)
+    GMAIL_ADDRESS = os.environ.get("GMAIL_ADDRESS", "")
+    GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "")
+    GMAIL_LABEL = os.environ.get("GMAIL_LABEL", "")  # optional; empty = search all mail
     # CORS
     FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:5173")
     

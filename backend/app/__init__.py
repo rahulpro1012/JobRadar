@@ -74,6 +74,7 @@ def create_app(config_class=None):
     from app.routes.blacklist import blacklist_bp
     from app.routes.settings import settings_bp
     from app.routes.admin import admin_bp
+    from app.routes.email import email_bp
 
     app.register_blueprint(health_bp, url_prefix="/api")
     app.register_blueprint(profile_bp, url_prefix="/api")
@@ -81,5 +82,6 @@ def create_app(config_class=None):
     app.register_blueprint(blacklist_bp, url_prefix="/api")
     app.register_blueprint(settings_bp, url_prefix="/api")
     app.register_blueprint(admin_bp, url_prefix="/api")
+    app.register_blueprint(email_bp, url_prefix="/api")
     
     return app
