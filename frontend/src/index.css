@@ -6,6 +6,7 @@
    Theme Variables — Dark (default) & Light
    ============================================ */
 :root, .dark {
+  color-scheme: dark;
   --bg-primary: #09090B;
   --bg-card: #18181B;
   --bg-card-hover: #1E1E21;
@@ -24,6 +25,7 @@
 }
 
 .light {
+  color-scheme: light;
   --bg-primary: #F8FAFC;
   --bg-card: #FFFFFF;
   --bg-card-hover: #F1F5F9;
