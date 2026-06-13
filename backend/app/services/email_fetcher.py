@@ -171,14 +171,18 @@ def _domain_of(url):
         return ""
 
 
-_EXTRACT_SYSTEM = """You extract job postings from one or more job-alert emails.
-Each email is delimited by a line like "--- EMAIL N ---".
-Return ONLY a valid JSON array (never markdown, never prose) of ALL jobs found across ALL emails.
-Each element: {"title": str, "company": str, "location": str, "url": str}.
-- "url" must be the direct link to the job/application.
-- Include every distinct job. If an email has no real job, contribute nothing for it.
-- If there are no jobs at all, return [].
-Do not invent jobs. Keep titles/companies as written."""
+_EXTRACT_SYSTEM = """You are a data extractor, NOT a programmer. You read job-alert emails and copy out the jobs you see.
+Each email is delimited by a line like "--- EMAIL N ---". Job links appear inline in angle brackets, e.g. Title <https://...>.
+
+Output ONLY a single JSON object of this exact shape:
+{"jobs": [{"title": str, "company": str, "location": str, "url": str}, ...]}
+
+Rules:
+- NEVER write code, functions, scripts, or explanations. Output the JSON object and nothing else.
+- Copy each job's title and its adjacent <url> exactly as written. "company" = the hiring company named in that email. "location" = the city/region if shown, else "".
+- Include EVERY distinct job listed across ALL emails. Ignore "manage alerts", "unsubscribe", privacy, and social links — those are not jobs.
+- If there are no jobs at all, output {"jobs": []}.
+- Do not invent jobs."""
 
 
 def _extract_jobs_from_chunk(chunk):
@@ -191,15 +195,18 @@ def _extract_jobs_from_chunk(chunk):
     for i, it in enumerate(chunk, 1):
         parts.append(f"--- EMAIL {i} ---\nSubject: {it['subject']}\n{it['text']}")
     prompt = "\n\n".join(parts)
-    # TEMP DIAGNOSTIC — what we actually feed the model (remove after debugging)
-    logger.info(f"[email][diag] prompt {len(prompt)} chars; preview:\n{prompt[:1500]}")
-    result = _call_groq(prompt, _EXTRACT_SYSTEM, model=FAST_MODEL, max_tokens=1500, temperature=0.1)
-    logger.info(f"[email][diag] raw Groq response:\n{result}")
+    result = _call_groq(
+        prompt, _EXTRACT_SYSTEM, model=FAST_MODEL, max_tokens=1500, temperature=0.1,
+        response_format={"type": "json_object"},
+    )
     if not result:
         return [], False
     try:
         cleaned = _clean_groq_json(result)
         data = json.loads(cleaned)
+        # JSON mode returns an object; jobs live under "jobs" (tolerate a bare list too)
+        if isinstance(data, dict):
+            data = data.get("jobs", [])
         return (data if isinstance(data, list) else []), True
     except Exception as e:
         logger.debug(f"[email] chunk parse failed: {e}")

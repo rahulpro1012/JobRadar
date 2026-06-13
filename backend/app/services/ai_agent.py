@@ -26,12 +26,16 @@ DAILY_LIMIT_FAST = 200
 # Groq API Client
 # ============================================================
 
-def _call_groq(prompt, system_prompt, model=FAST_MODEL, max_tokens=2000, temperature=0.3):
+def _call_groq(prompt, system_prompt, model=FAST_MODEL, max_tokens=2000, temperature=0.3,
+               response_format=None):
     """Call Groq API with quota tracking and 429 retry/backoff.
 
     On HTTP 429 (TPM rate limit), retries up to 3 times honoring the
     Retry-After header when present, else backing off 5 → 10 → 20s.
     Quota is only counted on a successful (200) response.
+
+    response_format: optional dict, e.g. {"type": "json_object"}, to force
+    structured output (prevents weak models from emitting prose/code).
     """
     import requests
 
@@ -51,6 +55,18 @@ def _call_groq(prompt, system_prompt, model=FAST_MODEL, max_tokens=2000, tempera
     backoffs = [5, 10, 20]  # seconds between attempts on 429
     max_attempts = len(backoffs) + 1
 
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt},
+        ],
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+    }
+    if response_format:
+        payload["response_format"] = response_format
+
     for attempt in range(max_attempts):
         try:
             resp = requests.post(
@@ -60,15 +76,7 @@ def _call_groq(prompt, system_prompt, model=FAST_MODEL, max_tokens=2000, tempera
                     "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
                 },
-                json={
-                    "model": model,
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": prompt},
-                    ],
-                    "max_tokens": max_tokens,
-                    "temperature": temperature,
-                },
+                json=payload,
                 timeout=30,
             )
 
