@@ -46,6 +46,11 @@ class Config:
     GMAIL_LABEL = os.environ.get("GMAIL_LABEL", "")  # optional; empty = search all mail
     # CORS
     FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:5173")
+
+    # Optional shared-password gate for public/hosted deployments.
+    # When set, every /api request (except health + CORS preflight) must send a
+    # matching X-App-Token header. Leave empty to disable (local/Docker).
+    APP_ACCESS_TOKEN = os.environ.get("APP_ACCESS_TOKEN", "")
     
     # Upload settings (override UPLOAD_FOLDER to point at a persistent volume in prod)
     UPLOAD_FOLDER = os.environ.get("UPLOAD_FOLDER", str(BASE_DIR / "uploads"))

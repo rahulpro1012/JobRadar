@@ -77,13 +77,23 @@ Open the Vercel URL → **Upload Resume** → **Refresh**. First backend request
 
 ---
 
-## Security
+## Security — turn on the access gate
 
-⚠️ **This deployment is public and has no authentication.** Anyone who finds the Vercel URL can trigger refreshes (burning *your* Groq/Adzuna/SerpApi quotas), upload a resume, and run an email scan. Options, in order of effort:
+This deployment is public. Without protection, anyone who finds the Vercel URL can trigger refreshes (burning *your* Groq/Adzuna/SerpApi quotas), upload a resume, and run email scans.
 
-- **Don't share the URL** (security-by-obscurity) — weak but zero-effort.
-- **Add a shared-password gate** — recommended. Ask me to wire a lightweight token check (`before_request` on the backend + a one-time password prompt on the frontend, exempting `/api/health` for Fly's checker). ~30 lines, no new deps.
-- **Vercel password protection** — available on Vercel Pro (paid); gates the frontend only, not the Fly API.
+A built-in **shared-password gate** handles this. To enable it, set a secret on the backend:
+
+```bash
+cd backend
+fly secrets set APP_ACCESS_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(24))')"
+# (or just pick your own password string)
+```
+
+Once set, every API call must carry that password. The frontend prompts for it once on first load (`window.prompt`), stores it in `localStorage`, and sends it as an `X-App-Token` header thereafter. `/api/health` stays open so Fly's health check keeps working.
+
+Leaving `APP_ACCESS_TOKEN` **unset disables the gate** — which is what you want for local Docker use, so no password is needed there.
+
+> This is a single shared password, not per-user accounts — right for a personal instance. For multi-user, friends should each run their own via Docker (see README).
 
 ---
 

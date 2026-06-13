@@ -12,6 +12,36 @@ const api = axios.create({
   headers: { 'Content-Type': 'application/json' },
 });
 
+// ── Optional access-token gate (only active when the backend enforces it) ──
+// Attaches the stored token to every request; on a 401, prompts once for the
+// password, stores it, and reloads. No-op when the backend has no gate (local).
+const TOKEN_KEY = 'jobradar_token';
+
+api.interceptors.request.use((config) => {
+  const t = localStorage.getItem(TOKEN_KEY);
+  if (t) config.headers['X-App-Token'] = t;
+  return config;
+});
+
+let promptingForToken = false;
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401 && !promptingForToken) {
+      promptingForToken = true;
+      localStorage.removeItem(TOKEN_KEY);
+      const t = window.prompt('Enter the JobRadar access password:');
+      if (t) {
+        localStorage.setItem(TOKEN_KEY, t);
+        window.location.reload();
+      } else {
+        promptingForToken = false;
+      }
+    }
+    return Promise.reject(error);
+  }
+);
+
 // ============================================================
 // Health
 // ============================================================

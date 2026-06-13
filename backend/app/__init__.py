@@ -37,6 +37,32 @@ def _setup_cors(app):
             return resp
 
 
+def _setup_auth_gate(app):
+    """Require a shared token on /api requests when APP_ACCESS_TOKEN is set.
+
+    Disabled (no-op) when the env var is empty — so local/Docker use is
+    frictionless. Health checks and CORS preflight are always allowed.
+    """
+    import hmac
+    token = app.config.get("APP_ACCESS_TOKEN", "")
+    if not token:
+        return  # gate disabled
+
+    open_paths = {"/api/health", "/api/health/"}
+
+    @app.before_request
+    def _require_token():
+        from flask import request, jsonify
+        if request.method == "OPTIONS":
+            return None  # let CORS preflight through
+        if request.path in open_paths:
+            return None  # health probe is public (Fly checker)
+        supplied = request.headers.get("X-App-Token", "")
+        if not hmac.compare_digest(supplied, token):
+            return jsonify({"error": "unauthorized"}), 401
+        return None
+
+
 def create_app(config_class=None):
     """Create and configure the Flask application."""
     app = Flask(__name__)
@@ -65,7 +91,10 @@ def create_app(config_class=None):
         })
     except ImportError:
         _setup_cors(app)
-    
+
+    # Optional shared-password gate (hosted/public deployments)
+    _setup_auth_gate(app)
+
     # Initialize database
     from app.database import init_db
     init_db(app.config)
