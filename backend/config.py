@@ -47,8 +47,8 @@ class Config:
     # CORS
     FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:5173")
     
-    # Upload settings
-    UPLOAD_FOLDER = str(BASE_DIR / "uploads")
+    # Upload settings (override UPLOAD_FOLDER to point at a persistent volume in prod)
+    UPLOAD_FOLDER = os.environ.get("UPLOAD_FOLDER", str(BASE_DIR / "uploads"))
     MAX_CONTENT_LENGTH = 5 * 1024 * 1024  # 5 MB max resume size
     ALLOWED_EXTENSIONS = {"pdf", "docx"}
     
