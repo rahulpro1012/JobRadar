@@ -1,0 +1,38 @@
+# JobRadar — single-user, self-hosted stack.
+#   docker compose up --build   →   open http://localhost:5173
+#
+# Secrets/keys come from .env (copy .env.example → .env first).
+# DB and uploaded resume persist on the host under ./data and ./uploads.
+
+services:
+  backend:
+    build: ./backend
+    container_name: jobradar-backend
+    env_file:
+      - .env
+    environment:
+      # These override .env so paths/origins are correct inside the container.
+      FLASK_ENV: production
+      SQLITE_DB_PATH: /app/data/jobradar.db
+      FRONTEND_URL: http://localhost:5173
+    volumes:
+      - ./data:/app/data          # SQLite database
+      - ./uploads:/app/uploads    # uploaded resume
+    ports:
+      - "5000:5000"               # exposed for direct API access / debugging
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:5000/api/health', timeout=5).status==200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  frontend:
+    build: ./frontend
+    container_name: jobradar-frontend
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+    restart: unless-stopped

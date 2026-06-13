@@ -95,3 +95,30 @@ def get_config():
     """Get configuration based on FLASK_ENV environment variable."""
     env = os.environ.get("FLASK_ENV", "development")
     return config_map.get(env, DevelopmentConfig)
+
+
+def log_config_status():
+    """Log which integrations are configured. Non-fatal — a missing key just
+    disables that source, so this is a heads-up, not a gate. Helps a fresh
+    deploy see at a glance what's on."""
+    import logging
+    log = logging.getLogger("jobradar.config")
+    c = Config
+    status = {
+        "Groq AI": bool(c.GROQ_API_KEY),
+        "Jooble": bool(c.JOOBLE_API_KEY),
+        "Adzuna": bool(c.ADZUNA_APP_ID and c.ADZUNA_APP_KEY),
+        "SerpApi": bool(c.SERPAPI_API_KEY),
+        "SearxNG": bool(c.SEARXNG_URL),
+        "Gmail scan": bool(c.GMAIL_ADDRESS and c.GMAIL_APP_PASSWORD),
+    }
+    on = [k for k, v in status.items() if v]
+    off = [k for k, v in status.items() if not v]
+    log.info("Integrations enabled: %s", ", ".join(on) or "(none)")
+    if off:
+        log.info("Integrations disabled (no key): %s", ", ".join(off))
+    if not c.GROQ_API_KEY:
+        log.warning(
+            "GROQ_API_KEY is not set — resume parsing, scoring, and AI reasoning "
+            "will be disabled. Get a free key at https://console.groq.com/keys"
+        )

@@ -4,7 +4,7 @@ Creates and configures the Flask app with CORS, routes, and database.
 """
 import os
 from flask import Flask
-from config import get_config
+from config import get_config, log_config_status
 
 
 def _setup_cors(app):
@@ -45,6 +45,9 @@ def create_app(config_class=None):
     if config_class is None:
         config_class = get_config()
     app.config.from_object(config_class)
+
+    # Heads-up log of which integrations are configured (non-fatal)
+    log_config_status()
     
     # Ensure upload directory exists
     os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)

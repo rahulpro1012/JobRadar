@@ -15,6 +15,13 @@ frontend/dist/
 backend/uploads/
 backend/*.db
 
+# Docker host-mounted runtime data (DB + uploaded resume)
+/data/
+/uploads/
+*.db-journal
+*.db-wal
+*.db-shm
+
 # IDE
 .vscode/
 .idea/

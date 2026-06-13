@@ -1,0 +1,15 @@
+# Keep the build context small and never bake secrets/data into the image
+.env
+.env.*
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+data/
+uploads/
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+*.log
