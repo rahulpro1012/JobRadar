@@ -191,7 +191,10 @@ def _extract_jobs_from_chunk(chunk):
     for i, it in enumerate(chunk, 1):
         parts.append(f"--- EMAIL {i} ---\nSubject: {it['subject']}\n{it['text']}")
     prompt = "\n\n".join(parts)
+    # TEMP DIAGNOSTIC — what we actually feed the model (remove after debugging)
+    logger.info(f"[email][diag] prompt {len(prompt)} chars; preview:\n{prompt[:1500]}")
     result = _call_groq(prompt, _EXTRACT_SYSTEM, model=FAST_MODEL, max_tokens=1500, temperature=0.1)
+    logger.info(f"[email][diag] raw Groq response:\n{result}")
     if not result:
         return [], False
     try:
