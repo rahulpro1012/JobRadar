@@ -30,7 +30,8 @@ logger = logging.getLogger(__name__)
 IMAP_HOST = "imap.gmail.com"
 MAX_EMAILS_PER_SCAN = 20      # cap messages processed per scan
 EMAILS_PER_CALL = 5           # batch N emails into one Groq call (fewer 429s)
-BODY_TRUNCATE = 1000          # chars of each email body sent to Groq
+BODY_TRUNCATE = 4000          # chars of each email body sent to Groq (job rows
+                              # in alert emails sit past the header boilerplate)
 CHUNK_GAP = 2.0               # seconds between chunk calls (TPM courtesy)
 
 # Query params to drop when canonicalizing tracking-wrapped alert links
@@ -99,6 +100,14 @@ def _strip_html(html):
     soup = BeautifulSoup(html, "html.parser")
     for t in soup(["style", "script"]):
         t.decompose()
+    # Inline each anchor's href beside its text so the extractor sees
+    # "<job title> <url>" together. get_text() alone drops every URL, and
+    # job-alert emails bury the links deep in heavy HTML — without this the
+    # model has titles but no links and returns nothing.
+    for a in soup.find_all("a"):
+        href = (a.get("href") or "").strip()
+        if href.startswith("http"):
+            a.replace_with(f"{a.get_text(' ', strip=True)} <{href}> ")
     return re.sub(r"\s+", " ", soup.get_text(" ")).strip()
 
 
