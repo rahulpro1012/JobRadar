@@ -109,7 +109,7 @@ Everything is set in `.env` (see [`.env.example`](./.env.example) for the annota
 
 ## Hosting it (personal cloud)
 
-Want it running 24/7 instead of locally? See **[DEPLOY.md](./DEPLOY.md)** — backend on Fly.io (free persistent SQLite volume) + frontend on Vercel. That's a single-user, public instance; the Docker setup above remains the right choice for letting multiple people each run their own.
+Want it running 24/7 instead of locally? See **[DEPLOY.md](./DEPLOY.md)** — backend on Render + frontend on Vercel + database on Turso, all free (no credit card). That's a single-user, public instance; the Docker setup above remains the right choice for letting multiple people each run their own.
 
 ## Running without Docker (local dev)
 

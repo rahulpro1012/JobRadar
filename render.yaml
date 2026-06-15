@@ -1,0 +1,45 @@
+# Render Blueprint for the JobRadar backend (free, no credit card).
+# Render → New → Blueprint → point at this repo. Builds from backend/Dockerfile.
+# Secrets (sync:false) are entered in the Render dashboard, not committed here.
+#
+# Persistence: Render's free disk is ephemeral, so the database lives in Turso —
+# set TURSO_DATABASE_URL + TURSO_AUTH_TOKEN below and the app uses it automatically.
+services:
+  - type: web
+    name: jobradar-backend
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: free
+    region: singapore
+    healthCheckPath: /api/health
+    envVars:
+      - key: FLASK_ENV
+        value: production
+      # --- secrets: set these in the Render dashboard ---
+      - key: GROQ_API_KEY
+        sync: false
+      - key: TURSO_DATABASE_URL
+        sync: false
+      - key: TURSO_AUTH_TOKEN
+        sync: false
+      - key: FRONTEND_URL          # your Vercel URL (for CORS)
+        sync: false
+      - key: APP_ACCESS_TOKEN      # shared password gate (recommended)
+        sync: false
+      - key: JOOBLE_API_KEY
+        sync: false
+      - key: ADZUNA_APP_ID
+        sync: false
+      - key: ADZUNA_APP_KEY
+        sync: false
+      - key: SERPAPI_API_KEY
+        sync: false
+      - key: SEARXNG_URL
+        sync: false
+      - key: GMAIL_ADDRESS
+        sync: false
+      - key: GMAIL_APP_PASSWORD
+        sync: false
+      - key: GMAIL_LABEL
+        sync: false

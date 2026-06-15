@@ -334,6 +334,111 @@ def _seed_default_companies(conn):
             )
 
 
+# ============================================================
+# Turso / libsql compatibility shim
+# ============================================================
+# libsql (Turso's driver) is DBAPI-ish but lacks two things the codebase uses:
+# sqlite3.Row (row_factory) and executescript(). These thin wrappers let every
+# call site keep sqlite3.Row semantics — dict(row) AND row[0] — and
+# conn.executescript() unchanged, whether the backend is SQLite or Turso.
+
+class _Row(dict):
+    """A dict that also supports positional indexing, like sqlite3.Row."""
+    def __init__(self, columns, values):
+        super().__init__(zip(columns, values))
+        self._values = tuple(values)
+
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return self._values[key]
+        return dict.__getitem__(self, key)
+
+
+class _LibsqlCursor:
+    """Wraps a libsql cursor so fetches return _Row objects."""
+    def __init__(self, cursor):
+        self._cur = cursor
+
+    def _columns(self):
+        desc = self._cur.description
+        return [d[0] for d in desc] if desc else []
+
+    def fetchone(self):
+        row = self._cur.fetchone()
+        return _Row(self._columns(), row) if row is not None else None
+
+    def fetchall(self):
+        cols = self._columns()
+        return [_Row(cols, r) for r in self._cur.fetchall()]
+
+    def fetchmany(self, size=None):
+        cols = self._columns()
+        rows = self._cur.fetchmany(size) if size is not None else self._cur.fetchmany()
+        return [_Row(cols, r) for r in rows]
+
+    def __iter__(self):
+        return iter(self.fetchall())
+
+    @property
+    def lastrowid(self):
+        return self._cur.lastrowid
+
+    @property
+    def rowcount(self):
+        return self._cur.rowcount
+
+    @property
+    def description(self):
+        return self._cur.description
+
+
+def _split_sql_statements(script):
+    """Split a multi-statement SQL script into individual statements.
+    Safe for our schema (plain CREATE TABLE/INDEX; no triggers/embedded ';')."""
+    statements = []
+    for raw in script.split(";"):
+        lines = [ln for ln in raw.splitlines() if not ln.strip().startswith("--")]
+        stmt = "\n".join(lines).strip()
+        if stmt:
+            statements.append(stmt)
+    return statements
+
+
+class _LibsqlConn:
+    """Wraps a libsql connection to mimic the sqlite3 API the app relies on:
+    cursors that yield _Row, and executescript()."""
+    def __init__(self, conn):
+        self._conn = conn
+
+    def execute(self, sql, params=()):
+        return _LibsqlCursor(self._conn.execute(sql, params))
+
+    def executemany(self, sql, seq_of_params):
+        self._conn.executemany(sql, seq_of_params)
+
+    def executescript(self, script):
+        for stmt in _split_sql_statements(script):
+            self._conn.execute(stmt)
+
+    def cursor(self):
+        return _LibsqlCursor(self._conn.cursor())
+
+    def commit(self):
+        self._conn.commit()
+
+    def rollback(self):
+        try:
+            self._conn.rollback()
+        except Exception:
+            pass
+
+    def close(self):
+        try:
+            self._conn.close()
+        except Exception:
+            pass
+
+
 @contextmanager
 def get_connection():
     """
@@ -345,9 +450,12 @@ def get_connection():
     else:
         conn = sqlite3.connect(_db_path)
     
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
+    # sqlite3.Row + PRAGMAs apply to the stdlib driver only. libsql has no
+    # row_factory and remote PRAGMAs are no-ops/errors, so guard them.
+    if isinstance(conn, sqlite3.Connection):
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA foreign_keys=ON")
     
     try:
         yield conn
@@ -365,14 +473,13 @@ def _get_turso_connection():
     """
     try:
         import libsql_experimental as libsql
-        return libsql.connect(
-            _turso_url,
-            auth_token=_turso_token
-        )
     except ImportError:
-        # Fallback: if libsql not installed, use local SQLite
-        print("WARNING: libsql not installed, falling back to local SQLite")
+        print("WARNING: libsql_experimental not installed, falling back to local SQLite")
         return sqlite3.connect(_db_path)
+    # Remote Turso connection — every query hits Turso directly, so data is
+    # durable even on an ephemeral host. Wrapped for sqlite3-like rows/executescript.
+    raw = libsql.connect(_turso_url, auth_token=_turso_token)
+    return _LibsqlConn(raw)
 
 
 # ============================================================
