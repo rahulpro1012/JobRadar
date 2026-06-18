@@ -20,7 +20,7 @@ def _setup_cors(app):
         if req_origin in allowed_origins:
             response.headers["Access-Control-Allow-Origin"] = req_origin
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
-        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-App-Token"
         return response
 
     @app.before_request
@@ -33,7 +33,7 @@ def _setup_cors(app):
             if req_origin in allowed_origins:
                 resp.headers["Access-Control-Allow-Origin"] = req_origin
             resp.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
-            resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+            resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-App-Token"
             return resp
 
 
@@ -86,7 +86,7 @@ def create_app(config_class=None):
             r"/api/*": {
                 "origins": [frontend_url, "http://localhost:5173", "http://localhost:3000"],
                 "methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-                "allow_headers": ["Content-Type", "Authorization"],
+                "allow_headers": ["Content-Type", "Authorization", "X-App-Token"],
             }
         })
     except ImportError:
