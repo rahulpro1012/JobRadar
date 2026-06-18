@@ -408,7 +408,8 @@ export default function App() {
 
         {/* Main layout — stacks on mobile, side-by-side on desktop */}
         <div className="flex flex-col lg:flex-row gap-4 sm:gap-6">
-          {/* Sidebar — mobile: collapsible toggle, desktop: always visible */}
+          {/* Sidebar — hidden until a profile exists, so first-run shows only the upload prompt */}
+          {profile && (<>
           <div className="lg:hidden">
             <button
               onClick={() => setMobileFilterOpen(!mobileFilterOpen)}
@@ -447,6 +448,7 @@ export default function App() {
               availableSources={stats?.by_source || {}}
             />
           </div>
+          </>)}
 
           {/* Content */}
           <div className="flex-1 min-w-0">
