@@ -45,22 +45,27 @@ export default function Navbar({ onUpload, onRefresh, onScanEmail, emailEnabled,
             <span className="hidden sm:inline">{hasProfile ? 'Update Resume' : 'Upload Resume'}</span>
           </button>
 
-          <button onClick={onRefresh} disabled={busy || !hasProfile} className="btn-primary text-xs sm:text-sm"
-            title={!hasProfile ? 'Upload a resume first' : 'Refresh jobs'}>
-            {isRefreshing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-            <span className="hidden sm:inline">Refresh</span>
-          </button>
+          {/* Refresh / Scan Email / Settings appear only once a resume is uploaded */}
+          {hasProfile && (
+            <>
+              <button onClick={onRefresh} disabled={busy} className="btn-primary text-xs sm:text-sm"
+                title="Refresh jobs">
+                {isRefreshing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                <span className="hidden sm:inline">Refresh</span>
+              </button>
 
-          <button onClick={onScanEmail} disabled={busy || !hasProfile || !emailEnabled}
-            className="btn-secondary text-xs sm:text-sm"
-            title={!emailEnabled ? 'Set GMAIL_ADDRESS and GMAIL_APP_PASSWORD to enable' : !hasProfile ? 'Upload a resume first' : 'Scan job-alert emails'}>
-            {scanning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Mail className="w-4 h-4" />}
-            <span className="hidden sm:inline">Scan Email</span>
-          </button>
+              <button onClick={onScanEmail} disabled={busy || !emailEnabled}
+                className="btn-secondary text-xs sm:text-sm"
+                title={!emailEnabled ? 'Set GMAIL_ADDRESS and GMAIL_APP_PASSWORD to enable' : 'Scan job-alert emails'}>
+                {scanning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Mail className="w-4 h-4" />}
+                <span className="hidden sm:inline">Scan Email</span>
+              </button>
 
-          <button onClick={onSettingsClick} className="btn-ghost p-2">
-            <Settings className="w-4 h-4" />
-          </button>
+              <button onClick={onSettingsClick} className="btn-ghost p-2">
+                <Settings className="w-4 h-4" />
+              </button>
+            </>
+          )}
         </div>
       </div>
     </header>

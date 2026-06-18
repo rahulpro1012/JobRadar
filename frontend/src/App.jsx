@@ -91,6 +91,7 @@ export default function App() {
       }
     }
     setWaking(false);
+    setLoading(false);  // don't leave the content blank/black — fall through to the empty state
     toast.error("Could not connect to backend. Please refresh the page.");
   };
 
