@@ -368,12 +368,14 @@ class _LibsqlCursor:
         return _Row(self._columns(), row) if row is not None else None
 
     def fetchall(self):
+        # Fetch BEFORE reading description: libsql populates description after a fetch
+        rows = self._cur.fetchall()
         cols = self._columns()
-        return [_Row(cols, r) for r in self._cur.fetchall()]
+        return [_Row(cols, r) for r in rows]
 
     def fetchmany(self, size=None):
-        cols = self._columns()
         rows = self._cur.fetchmany(size) if size is not None else self._cur.fetchmany()
+        cols = self._columns()
         return [_Row(cols, r) for r in rows]
 
     def __iter__(self):
@@ -411,10 +413,11 @@ class _LibsqlConn:
         self._conn = conn
 
     def execute(self, sql, params=()):
-        return _LibsqlCursor(self._conn.execute(sql, params))
+        # libsql requires a tuple for parameters; callers (and sqlite3) also pass lists
+        return _LibsqlCursor(self._conn.execute(sql, tuple(params)))
 
     def executemany(self, sql, seq_of_params):
-        self._conn.executemany(sql, seq_of_params)
+        self._conn.executemany(sql, [tuple(p) for p in seq_of_params])
 
     def executescript(self, script):
         for stmt in _split_sql_statements(script):
