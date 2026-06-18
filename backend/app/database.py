@@ -368,9 +368,18 @@ class _LibsqlCursor:
         return _Row(self._columns(), row) if row is not None else None
 
     def fetchall(self):
-        # Fetch BEFORE reading description: libsql populates description after a fetch
-        rows = self._cur.fetchall()
+        # libsql populates description only after a fetchone() (not after fetchall),
+        # so drive iteration with fetchone(). Rows are buffered, so this stays local.
+        first = self._cur.fetchone()
+        if first is None:
+            return []
         cols = self._columns()
+        rows = [first]
+        while True:
+            r = self._cur.fetchone()
+            if r is None:
+                break
+            rows.append(r)
         return [_Row(cols, r) for r in rows]
 
     def fetchmany(self, size=None):
