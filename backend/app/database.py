@@ -6,6 +6,8 @@ Provides schema creation, connection management, and query helpers.
 import sqlite3
 import json
 import os
+import threading
+import time as _time
 from datetime import datetime
 from contextlib import contextmanager
 
@@ -14,7 +16,10 @@ _db_path = None
 _use_turso = False
 _turso_url = None
 _turso_token = None
-_turso_initial_sync = False  # one-time pull from the Turso primary per process
+_turso_initial_sync = False       # one-time pull from the Turso primary per process
+_turso_lock = threading.RLock()   # serialize libsql access (not concurrency-safe)
+_sync_state = {"last": 0.0}       # throttle sync() network round-trips
+_SYNC_INTERVAL = 3.0              # min seconds between embedded-replica syncs
 
 
 # ============================================================
@@ -438,11 +443,16 @@ class _LibsqlConn:
 
     def commit(self):
         self._conn.commit()
-        # Embedded replica: push committed local writes to the remote Turso primary
-        try:
-            self._conn.sync()
-        except Exception:
-            pass
+        # Push to remote, throttled: a write-heavy refresh does hundreds of commits
+        # and a network sync on each would crawl. Local reads see writes immediately
+        # regardless (same replica file); sync is only for cross-restart durability.
+        now = _time.monotonic()
+        if now - _sync_state["last"] >= _SYNC_INTERVAL:
+            try:
+                self._conn.sync()
+                _sync_state["last"] = now
+            except Exception:
+                pass
 
     def rollback(self):
         try:
@@ -463,25 +473,34 @@ def get_connection():
     Get a database connection.
     Uses local SQLite for development, Turso for production.
     """
+    # Turso/libsql isn't safe for concurrent use across the refresh's worker
+    # threads, so serialize all DB access behind a lock. Single-user, and the
+    # parallel work is network fetching (still concurrent) — only DB ops queue.
     if _use_turso:
-        conn = _get_turso_connection()
-    else:
-        conn = sqlite3.connect(_db_path)
-    
-    # sqlite3.Row + PRAGMAs apply to the stdlib driver only. libsql has no
-    # row_factory and remote PRAGMAs are no-ops/errors, so guard them.
-    if isinstance(conn, sqlite3.Connection):
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA foreign_keys=ON")
-    
+        _turso_lock.acquire()
     try:
-        yield conn
-    except Exception:
-        conn.rollback()
-        raise
+        if _use_turso:
+            conn = _get_turso_connection()
+        else:
+            conn = sqlite3.connect(_db_path)
+
+        # sqlite3.Row + PRAGMAs apply to the stdlib driver only (incl. the
+        # libsql-missing fallback). libsql has no row_factory / remote PRAGMAs.
+        if isinstance(conn, sqlite3.Connection):
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA foreign_keys=ON")
+
+        try:
+            yield conn
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
     finally:
-        conn.close()
+        if _use_turso:
+            _turso_lock.release()
 
 
 def _get_turso_connection():
