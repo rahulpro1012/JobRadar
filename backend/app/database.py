@@ -14,6 +14,7 @@ _db_path = None
 _use_turso = False
 _turso_url = None
 _turso_token = None
+_turso_initial_sync = False  # one-time pull from the Turso primary per process
 
 
 # ============================================================
@@ -437,6 +438,11 @@ class _LibsqlConn:
 
     def commit(self):
         self._conn.commit()
+        # Embedded replica: push committed local writes to the remote Turso primary
+        try:
+            self._conn.sync()
+        except Exception:
+            pass
 
     def rollback(self):
         try:
@@ -483,15 +489,24 @@ def _get_turso_connection():
     Get a Turso connection via libsql.
     Falls back to local SQLite if libsql is not installed.
     """
+    global _turso_initial_sync
     try:
         import libsql_experimental as libsql
     except ImportError:
         print("WARNING: libsql_experimental not installed, falling back to local SQLite")
         return sqlite3.connect(_db_path)
-    # Remote Turso connection — every query hits Turso directly, so data is
-    # durable even on an ephemeral host. Wrapped for sqlite3-like rows/executescript.
-    raw = libsql.connect(_turso_url, auth_token=_turso_token)
-    return _LibsqlConn(raw)
+    # Embedded-replica mode: a local SQLite file kept in sync with the Turso
+    # primary. Remote-only mode is unreliable here (Hrana "stream not found" on
+    # multi-statement writes -> writes silently lost). Embedded replica gives
+    # correct local read-after-write; sync() pushes writes durably to Turso.
+    conn = libsql.connect(_db_path, sync_url=_turso_url, auth_token=_turso_token)
+    if not _turso_initial_sync:
+        try:
+            conn.sync()  # pull existing remote data into the fresh replica (once per boot)
+        except Exception as e:
+            print(f"WARNING: initial Turso sync failed: {e}")
+        _turso_initial_sync = True
+    return _LibsqlConn(conn)
 
 
 # ============================================================
