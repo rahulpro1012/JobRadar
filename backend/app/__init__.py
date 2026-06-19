@@ -20,7 +20,7 @@ def _setup_cors(app):
         if req_origin in allowed_origins:
             response.headers["Access-Control-Allow-Origin"] = req_origin
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
-        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-App-Token"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
         return response
 
     @app.before_request
@@ -33,34 +33,8 @@ def _setup_cors(app):
             if req_origin in allowed_origins:
                 resp.headers["Access-Control-Allow-Origin"] = req_origin
             resp.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
-            resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-App-Token"
+            resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
             return resp
-
-
-def _setup_auth_gate(app):
-    """Require a shared token on /api requests when APP_ACCESS_TOKEN is set.
-
-    Disabled (no-op) when the env var is empty — so local/Docker use is
-    frictionless. Health checks and CORS preflight are always allowed.
-    """
-    import hmac
-    token = app.config.get("APP_ACCESS_TOKEN", "")
-    if not token:
-        return  # gate disabled
-
-    open_paths = {"/api/health", "/api/health/"}
-
-    @app.before_request
-    def _require_token():
-        from flask import request, jsonify
-        if request.method == "OPTIONS":
-            return None  # let CORS preflight through
-        if request.path in open_paths:
-            return None  # health probe is public (Fly checker)
-        supplied = request.headers.get("X-App-Token", "")
-        if not hmac.compare_digest(supplied, token):
-            return jsonify({"error": "unauthorized"}), 401
-        return None
 
 
 def create_app(config_class=None):
@@ -86,14 +60,11 @@ def create_app(config_class=None):
             r"/api/*": {
                 "origins": [frontend_url, "http://localhost:5173", "http://localhost:3000"],
                 "methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-                "allow_headers": ["Content-Type", "Authorization", "X-App-Token"],
+                "allow_headers": ["Content-Type", "Authorization"],
             }
         })
     except ImportError:
         _setup_cors(app)
-
-    # Optional shared-password gate (hosted/public deployments)
-    _setup_auth_gate(app)
 
     # Initialize database
     from app.database import init_db

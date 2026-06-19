@@ -12,16 +12,9 @@ class Config:
     """Base configuration."""
     SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-key-change-in-production")
     
-    # Database - supports both local SQLite and Turso
-    # For local dev: sqlite:///jobradar.db
-    # For production (Turso): set TURSO_DATABASE_URL and TURSO_AUTH_TOKEN
-    TURSO_DATABASE_URL = os.environ.get("TURSO_DATABASE_URL", "")
-    TURSO_AUTH_TOKEN = os.environ.get("TURSO_AUTH_TOKEN", "")
+    # Local SQLite database
     SQLITE_DB_PATH = os.environ.get("SQLITE_DB_PATH", str(BASE_DIR / "jobradar.db"))
-    
-    # Use Turso if URL is provided, otherwise fall back to local SQLite
-    USE_TURSO = bool(TURSO_DATABASE_URL)
-    
+
     # API Keys (free tiers)
     GOOGLE_CSE_API_KEY = os.environ.get("GOOGLE_CSE_API_KEY", "")
     GOOGLE_CSE_CX = os.environ.get("GOOGLE_CSE_CX", "")
@@ -47,11 +40,6 @@ class Config:
     # CORS
     FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:5173")
 
-    # Optional shared-password gate for public/hosted deployments.
-    # When set, every /api request (except health + CORS preflight) must send a
-    # matching X-App-Token header. Leave empty to disable (local/Docker).
-    APP_ACCESS_TOKEN = os.environ.get("APP_ACCESS_TOKEN", "")
-    
     # Upload settings (override UPLOAD_FOLDER to point at a persistent volume in prod)
     UPLOAD_FOLDER = os.environ.get("UPLOAD_FOLDER", str(BASE_DIR / "uploads"))
     MAX_CONTENT_LENGTH = 5 * 1024 * 1024  # 5 MB max resume size
@@ -86,7 +74,6 @@ class TestingConfig(Config):
     """Testing configuration."""
     TESTING = True
     SQLITE_DB_PATH = ":memory:"
-    USE_TURSO = False
 
 
 config_map = {

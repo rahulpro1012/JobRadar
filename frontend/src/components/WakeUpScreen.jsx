@@ -10,7 +10,7 @@ export default function WakeUpScreen() {
       </div>
       <h1 className="font-display font-bold text-2xl t-primary mb-2">JobRadar</h1>
       <p className="t-muted text-sm mb-6 text-center max-w-xs">
-        Waking up the server... This takes about a minute on the first visit.
+        Connecting to the backend…
       </p>
       <Loader2 className="w-6 h-6 text-brand-500 animate-spin" />
     </div>

@@ -1,6 +1,6 @@
 # JobRadar
 
-**AI-powered, self-hosted job-discovery dashboard.** It aggregates postings from 10+ sources, parses your resume to learn your profile, scores every job against it, and surfaces the top matches with per-job *“why apply / why skip”* reasoning. It can also scan your Gmail job-alert emails and fold those into the same pipeline.
+**AI-powered job-discovery dashboard that runs locally on your machine.** It aggregates postings from 10+ sources, parses your resume to learn your profile, scores every job against it, and surfaces the top matches with per-job *“why apply / why skip”* reasoning. It can also scan your Gmail job-alert emails and fold those into the same pipeline.
 
 Runs entirely on your machine — your resume, your API keys, your data. No accounts, no telemetry, no shared database.
 
@@ -62,7 +62,7 @@ All free tier. You can start with **just Groq** and add the rest whenever — mi
 | `JOOBLE_API_KEY` | Recommended | Naukri/Indeed/etc. aggregation | [jooble.org/api/about](https://jooble.org/api/about) | emailed within ~a day |
 | `ADZUNA_APP_ID` + `ADZUNA_APP_KEY` | Recommended | Indian boards w/ salary data | [developer.adzuna.com/signup](https://developer.adzuna.com/signup) | ~250/day |
 | `SERPAPI_API_KEY` | Recommended | Google Jobs | [serpapi.com/users/sign_up](https://serpapi.com/users/sign_up) | 100 searches/month |
-| `SEARXNG_URL` | Optional | Naukri + LinkedIn web search | self-host [SearxNG](https://github.com/searxng/searxng) on Render | — |
+| `SEARXNG_URL` | Optional | Naukri + LinkedIn web search | self-host [SearxNG](https://github.com/searxng/searxng) | — |
 | `GMAIL_*` | Optional | “Scan Email” feature | see below | — |
 
 Keyless sources (Greenhouse, Lever, Ashby, Workable, SmartRecruiters, RemoteOK, Arbeitnow, HN *Who is hiring*) always run — so even with only a Groq key you'll get hundreds of scored jobs per refresh.
@@ -102,14 +102,9 @@ The **Scan Email** button imports postings from your job-alert emails and runs t
 Everything is set in `.env` (see [`.env.example`](./.env.example) for the annotated list). Notes:
 
 - `SQLITE_DB_PATH` and `FRONTEND_URL` are set automatically by `docker-compose.yml` — no need to touch them.
-- Leave `TURSO_*` empty unless you specifically want a hosted libSQL database instead of local SQLite.
 - The frontend is built with `VITE_API_URL` empty on purpose: it calls relative `/api`, which nginx proxies to the backend. This keeps the browser on one origin (`:5173`) and avoids CORS entirely.
 
 ---
-
-## Hosting it (personal cloud)
-
-Want it running 24/7 instead of locally? See **[DEPLOY.md](./DEPLOY.md)** — backend on Render + frontend on Vercel + database on Turso, all free (no credit card). That's a single-user, public instance; the Docker setup above remains the right choice for letting multiple people each run their own.
 
 ## Running without Docker (local dev)
 
@@ -159,7 +154,7 @@ docker compose up --build
 
 **A source returns 0 jobs** — likely that key isn't set, or you've hit its free-tier quota (see **Settings → API Quota**). Other sources still work; one quiet source isn't a failure.
 
-**SearxNG times out** — if you point `SEARXNG_URL` at a Render free instance, it sleeps after ~15 min idle; the first request warms it up. It's one source out of many — the rest are unaffected.
+**SearxNG times out** — if you point `SEARXNG_URL` at a free-tier instance that sleeps when idle, the first request warms it up. It's one source out of many — the rest are unaffected.
 
 **`database is locked`** — only one backend process should run. The container uses gunicorn with a single worker for exactly this reason; don't run a second backend against the same `data/`.
 
@@ -191,7 +186,7 @@ docker compose up --build
 ## Limitations & notes
 
 - **Single-user, no auth.** Each person runs their own instance. Don't expose it to the public internet as-is.
-- **Outbound TLS verification is disabled** in the fetchers (a network workaround). Fine for local self-hosting; be aware if you harden this for a server.
+- **Outbound TLS verification is disabled** in the fetchers (a network workaround). Fine for localhost; revisit if you ever expose it beyond your machine.
 - **Free-tier quotas** apply (Adzuna ~250/day, SerpApi 100/month, Groq 14,400/day). One or two refreshes a day stays well within them.
 - **AI scoring is a signal, not a verdict** — it reflects how well a posting matches your parsed resume; always read the listing yourself before applying.
 

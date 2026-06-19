@@ -1,25 +1,15 @@
 """
 JobRadar Database Layer
-Handles both local SQLite (development) and Turso (production).
-Provides schema creation, connection management, and query helpers.
+Local SQLite storage. Provides schema creation, connection management, and query helpers.
 """
 import sqlite3
 import json
 import os
-import threading
-import time as _time
 from datetime import datetime
 from contextlib import contextmanager
 
-# Will be set by init_db()
+# Set by init_db()
 _db_path = None
-_use_turso = False
-_turso_url = None
-_turso_token = None
-_turso_initial_sync = False       # one-time pull from the Turso primary per process
-_turso_lock = threading.RLock()   # serialize libsql access (not concurrency-safe)
-_sync_state = {"last": 0.0}       # throttle sync() network round-trips
-_SYNC_INTERVAL = 3.0              # min seconds between embedded-replica syncs
 
 
 # ============================================================
@@ -279,13 +269,9 @@ DEFAULT_COMPANIES = [
 
 def init_db(app_config):
     """Initialize database configuration from app config."""
-    global _db_path, _use_turso, _turso_url, _turso_token
-    
-    _use_turso = app_config.get("USE_TURSO", False)
-    _turso_url = app_config.get("TURSO_DATABASE_URL", "")
-    _turso_token = app_config.get("TURSO_AUTH_TOKEN", "")
+    global _db_path
     _db_path = app_config.get("SQLITE_DB_PATH", "jobradar.db")
-    
+
     # Create tables
     with get_connection() as conn:
         conn.executescript(SCHEMA_SQL)
@@ -340,192 +326,20 @@ def _seed_default_companies(conn):
             )
 
 
-# ============================================================
-# Turso / libsql compatibility shim
-# ============================================================
-# libsql (Turso's driver) is DBAPI-ish but lacks two things the codebase uses:
-# sqlite3.Row (row_factory) and executescript(). These thin wrappers let every
-# call site keep sqlite3.Row semantics — dict(row) AND row[0] — and
-# conn.executescript() unchanged, whether the backend is SQLite or Turso.
-
-class _Row(dict):
-    """A dict that also supports positional indexing, like sqlite3.Row."""
-    def __init__(self, columns, values):
-        super().__init__(zip(columns, values))
-        self._values = tuple(values)
-
-    def __getitem__(self, key):
-        if isinstance(key, int):
-            return self._values[key]
-        return dict.__getitem__(self, key)
-
-
-class _LibsqlCursor:
-    """Wraps a libsql cursor so fetches return _Row objects."""
-    def __init__(self, cursor):
-        self._cur = cursor
-
-    def _columns(self):
-        desc = self._cur.description
-        return [d[0] for d in desc] if desc else []
-
-    def fetchone(self):
-        row = self._cur.fetchone()
-        return _Row(self._columns(), row) if row is not None else None
-
-    def fetchall(self):
-        # libsql populates description only after a fetchone() (not after fetchall),
-        # so drive iteration with fetchone(). Rows are buffered, so this stays local.
-        first = self._cur.fetchone()
-        if first is None:
-            return []
-        cols = self._columns()
-        rows = [first]
-        while True:
-            r = self._cur.fetchone()
-            if r is None:
-                break
-            rows.append(r)
-        return [_Row(cols, r) for r in rows]
-
-    def fetchmany(self, size=None):
-        rows = self._cur.fetchmany(size) if size is not None else self._cur.fetchmany()
-        cols = self._columns()
-        return [_Row(cols, r) for r in rows]
-
-    def __iter__(self):
-        return iter(self.fetchall())
-
-    @property
-    def lastrowid(self):
-        return self._cur.lastrowid
-
-    @property
-    def rowcount(self):
-        return self._cur.rowcount
-
-    @property
-    def description(self):
-        return self._cur.description
-
-
-def _split_sql_statements(script):
-    """Split a multi-statement SQL script into individual statements.
-    Safe for our schema (plain CREATE TABLE/INDEX; no triggers/embedded ';')."""
-    statements = []
-    for raw in script.split(";"):
-        lines = [ln for ln in raw.splitlines() if not ln.strip().startswith("--")]
-        stmt = "\n".join(lines).strip()
-        if stmt:
-            statements.append(stmt)
-    return statements
-
-
-class _LibsqlConn:
-    """Wraps a libsql connection to mimic the sqlite3 API the app relies on:
-    cursors that yield _Row, and executescript()."""
-    def __init__(self, conn):
-        self._conn = conn
-
-    def execute(self, sql, params=()):
-        # libsql requires a tuple for parameters; callers (and sqlite3) also pass lists
-        return _LibsqlCursor(self._conn.execute(sql, tuple(params)))
-
-    def executemany(self, sql, seq_of_params):
-        self._conn.executemany(sql, [tuple(p) for p in seq_of_params])
-
-    def executescript(self, script):
-        for stmt in _split_sql_statements(script):
-            self._conn.execute(stmt)
-
-    def cursor(self):
-        return _LibsqlCursor(self._conn.cursor())
-
-    def commit(self):
-        self._conn.commit()
-        # Push to remote, throttled: a write-heavy refresh does hundreds of commits
-        # and a network sync on each would crawl. Local reads see writes immediately
-        # regardless (same replica file); sync is only for cross-restart durability.
-        now = _time.monotonic()
-        if now - _sync_state["last"] >= _SYNC_INTERVAL:
-            try:
-                self._conn.sync()
-                _sync_state["last"] = now
-            except Exception:
-                pass
-
-    def rollback(self):
-        try:
-            self._conn.rollback()
-        except Exception:
-            pass
-
-    def close(self):
-        try:
-            self._conn.close()
-        except Exception:
-            pass
-
-
 @contextmanager
 def get_connection():
-    """
-    Get a database connection.
-    Uses local SQLite for development, Turso for production.
-    """
-    # Turso/libsql isn't safe for concurrent use across the refresh's worker
-    # threads, so serialize all DB access behind a lock. Single-user, and the
-    # parallel work is network fetching (still concurrent) — only DB ops queue.
-    if _use_turso:
-        _turso_lock.acquire()
+    """Get a local SQLite database connection (context manager)."""
+    conn = sqlite3.connect(_db_path)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=ON")
     try:
-        if _use_turso:
-            conn = _get_turso_connection()
-        else:
-            conn = sqlite3.connect(_db_path)
-
-        # sqlite3.Row + PRAGMAs apply to the stdlib driver only (incl. the
-        # libsql-missing fallback). libsql has no row_factory / remote PRAGMAs.
-        if isinstance(conn, sqlite3.Connection):
-            conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA foreign_keys=ON")
-
-        try:
-            yield conn
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
+        yield conn
+    except Exception:
+        conn.rollback()
+        raise
     finally:
-        if _use_turso:
-            _turso_lock.release()
-
-
-def _get_turso_connection():
-    """
-    Get a Turso connection via libsql.
-    Falls back to local SQLite if libsql is not installed.
-    """
-    global _turso_initial_sync
-    try:
-        import libsql_experimental as libsql
-    except ImportError:
-        print("WARNING: libsql_experimental not installed, falling back to local SQLite")
-        return sqlite3.connect(_db_path)
-    # Embedded-replica mode: a local SQLite file kept in sync with the Turso
-    # primary. Remote-only mode is unreliable here (Hrana "stream not found" on
-    # multi-statement writes -> writes silently lost). Embedded replica gives
-    # correct local read-after-write; sync() pushes writes durably to Turso.
-    conn = libsql.connect(_db_path, sync_url=_turso_url, auth_token=_turso_token)
-    if not _turso_initial_sync:
-        try:
-            conn.sync()  # pull existing remote data into the fresh replica (once per boot)
-        except Exception as e:
-            print(f"WARNING: initial Turso sync failed: {e}")
-        _turso_initial_sync = True
-    return _LibsqlConn(conn)
+        conn.close()
 
 
 # ============================================================
