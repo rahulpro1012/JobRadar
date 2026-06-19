@@ -88,20 +88,9 @@ export const removeBlacklistEntry = (id) => api.delete(`/blacklist/${id}`);
 
 export const getQuota = () => api.get('/settings/quota');
 
-export const getCompanies = () => api.get('/settings/companies');
-
-export const addCompany = (data) => api.post('/settings/companies', data);
-
-export const removeCompany = (id) => api.delete(`/settings/companies/${id}`);
-
-export const toggleCompany = (id) =>
-  api.patch(`/settings/companies/${id}/toggle`);
-
 // ============================================================
 // Preferences
 // ============================================================
-
-export const getPreferences = () => api.get('/preferences');
 
 export const resetPreferences = () => api.post('/preferences/reset');
 
