@@ -565,12 +565,14 @@ def _store_jobs(jobs):
 
     new_count = 0
     with get_connection() as conn:
+        # Preload existing URLs once (N+1 per-job SELECT -> single scan). The set is
+        # updated as we insert, so it also dedups repeats within this same batch.
+        seen_urls = {
+            row[0] for row in conn.execute("SELECT source_url FROM jobs").fetchall()
+        }
         for job in jobs:
-            existing = conn.execute(
-                "SELECT id FROM jobs WHERE source_url = ?", (job["source_url"],)
-            ).fetchone()
-
-            if existing:
+            url = job["source_url"]
+            if url in seen_urls:
                 continue
 
             try:
@@ -586,6 +588,7 @@ def _store_jobs(jobs):
                     job.get("posted_date", ""),
                     1 if job.get("via_email") else 0,
                 ))
+                seen_urls.add(url)
                 new_count += 1
             except Exception as e:
                 logger.warning(f"Failed to insert job: {e}")
@@ -720,24 +723,33 @@ def _run_refresh_background(job_id, profile, config):
 
         ai_count = 0
         if is_ai_enabled():
+            # Only analyze jobs that need it: no analysis yet, or analysis older than
+            # the current profile (a resume re-upload bumps profile.updated_at and thus
+            # re-scores everything). When nothing is new, the whole rate-limited AI
+            # phase — including its inter-batch sleeps — is skipped entirely.
+            profile_ts = profile.get("updated_at") or "1970-01-01 00:00:00"
             top_jobs = execute_query(
-                """SELECT id, title, company, location, description_snippet, match_score
-                   FROM jobs WHERE status = 'new'
-                   ORDER BY match_score DESC LIMIT 25""",
+                """SELECT j.id, j.title, j.company, j.location, j.description_snippet, j.match_score
+                   FROM jobs j
+                   LEFT JOIN job_ai_analysis a ON a.job_id = j.id
+                   WHERE j.status = 'new'
+                     AND (a.job_id IS NULL OR a.analyzed_at < ?)
+                   ORDER BY j.match_score DESC LIMIT 25""",
+                (profile_ts,),
                 fetch_all=True
             )
             if top_jobs:
+                # match_score already selected above — avoid a per-job re-SELECT.
+                base_scores = {j["id"]: j["match_score"] for j in top_jobs}
                 analyses = analyze_jobs_batch(top_jobs, profile, batch_size=10)
                 if analyses:
                     with get_connection() as conn:
                         for analysis in analyses:
                             jid = analysis["job_id"]
                             ai_score = analysis["score"]
-                            base = conn.execute(
-                                "SELECT match_score FROM jobs WHERE id = ?", (jid,)
-                            ).fetchone()
-                            if base:
-                                blended = int(base[0] * 0.6 + ai_score * 0.4)
+                            base_score = base_scores.get(jid)
+                            if base_score is not None:
+                                blended = int(base_score * 0.6 + ai_score * 0.4)
                                 conn.execute(
                                     """UPDATE jobs SET adjusted_score = ?, ai_score = ?, ai_reason = ?
                                        WHERE id = ?""",
@@ -801,6 +813,8 @@ def _c1_analyze_and_store(top_jobs, profile):
     if not top_jobs:
         return 0
     from app.services.ai_agent import analyze_jobs_batch
+    # match_score already selected into top_jobs — avoid a per-job re-SELECT.
+    base_scores = {j["id"]: j["match_score"] for j in top_jobs}
     analyses = analyze_jobs_batch(top_jobs, profile, batch_size=10)
     if not analyses:
         return 0
@@ -808,10 +822,10 @@ def _c1_analyze_and_store(top_jobs, profile):
         for analysis in analyses:
             jid = analysis["job_id"]
             ai_score = analysis["score"]
-            base = conn.execute("SELECT match_score FROM jobs WHERE id = ?", (jid,)).fetchone()
-            if not base:
+            base_score = base_scores.get(jid)
+            if base_score is None:
                 continue
-            blended = int(base[0] * 0.6 + ai_score * 0.4)
+            blended = int(base_score * 0.6 + ai_score * 0.4)
             conn.execute(
                 "UPDATE jobs SET adjusted_score = ?, ai_score = ?, ai_reason = ? WHERE id = ?",
                 (blended, ai_score, analysis["fit_summary"], jid),
@@ -889,13 +903,19 @@ def _run_email_scan_background(job_id, profile, config):
         ai_count = 0
         from app.services.ai_agent import is_ai_enabled
         if is_ai_enabled() and jobs:
+            # Only analyze email jobs that need it: no analysis yet, or analysis older
+            # than the current profile (mirrors the refresh path).
+            profile_ts = profile.get("updated_at") or "1970-01-01 00:00:00"
             urls = [j["source_url"] for j in jobs]
             placeholders = ",".join("?" * len(urls))
             top_jobs = execute_query(
-                f"""SELECT id, title, company, location, description_snippet, match_score
-                    FROM jobs WHERE source_url IN ({placeholders}) AND status = 'new'
-                    ORDER BY match_score DESC LIMIT 15""",
-                urls, fetch_all=True,
+                f"""SELECT j.id, j.title, j.company, j.location, j.description_snippet, j.match_score
+                    FROM jobs j
+                    LEFT JOIN job_ai_analysis a ON a.job_id = j.id
+                    WHERE j.source_url IN ({placeholders}) AND j.status = 'new'
+                      AND (a.job_id IS NULL OR a.analyzed_at < ?)
+                    ORDER BY j.match_score DESC LIMIT 15""",
+                urls + [profile_ts], fetch_all=True,
             )
             ai_count = _c1_analyze_and_store(top_jobs, profile)
             logger.info(f"[EmailScan {job_id}] C1: analyzed {ai_count} email jobs")

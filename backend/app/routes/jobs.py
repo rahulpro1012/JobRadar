@@ -361,15 +361,25 @@ def refresh_jobs():
         try:
             from app.services.ai_agent import analyze_jobs_batch, is_ai_enabled
             if is_ai_enabled():
+                # Only analyze jobs that need it: no analysis yet, or analysis older
+                # than the current profile (re-upload bumps profile.updated_at, forcing
+                # a re-score). Skips the slow AI phase entirely when nothing is new.
+                profile_ts = profile.get("updated_at") or "1970-01-01 00:00:00"
                 top_jobs = execute_query(
-                    """SELECT id, title, company, location, description_snippet, match_score
-                       FROM jobs WHERE status = 'new'
-                       ORDER BY match_score DESC LIMIT 25""",
+                    """SELECT j.id, j.title, j.company, j.location, j.description_snippet, j.match_score
+                       FROM jobs j
+                       LEFT JOIN job_ai_analysis a ON a.job_id = j.id
+                       WHERE j.status = 'new'
+                         AND (a.job_id IS NULL OR a.analyzed_at < ?)
+                       ORDER BY j.match_score DESC LIMIT 25""",
+                    (profile_ts,),
                     fetch_all=True
                 )
                 if top_jobs:
                     # C1: Get structured analysis with reasoning
                     # TPM fix: reduce batch size from 25 to 10 to stay under Groq's 6000 TPM limit
+                    # match_score already selected above — avoid a per-job re-SELECT.
+                    base_scores = {j["id"]: j["match_score"] for j in top_jobs}
                     analyses = analyze_jobs_batch(top_jobs, profile, batch_size=10)
                     if analyses:
                         with get_connection() as conn:
@@ -377,12 +387,10 @@ def refresh_jobs():
                                 job_id = analysis["job_id"]
                                 ai_score = analysis["score"]
 
-                                # Get base rule-based score
-                                base = conn.execute(
-                                    "SELECT match_score FROM jobs WHERE id = ?", (job_id,)
-                                ).fetchone()
-                                if base:
-                                    blended = int(base[0] * 0.6 + ai_score * 0.4)
+                                # Get base rule-based score (preloaded, no extra query)
+                                base_score = base_scores.get(job_id)
+                                if base_score is not None:
+                                    blended = int(base_score * 0.6 + ai_score * 0.4)
 
                                     # Update jobs table with blended score
                                     conn.execute(

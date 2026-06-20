@@ -228,6 +228,7 @@ CREATE TABLE IF NOT EXISTS job_ai_analysis (
 -- Indexes for common queries
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
 CREATE INDEX IF NOT EXISTS idx_jobs_match_score ON jobs(match_score DESC);
+CREATE INDEX IF NOT EXISTS idx_jobs_adjusted_score ON jobs(adjusted_score DESC);
 CREATE INDEX IF NOT EXISTS idx_jobs_fetched_date ON jobs(fetched_date DESC);
 CREATE INDEX IF NOT EXISTS idx_jobs_source_domain ON jobs(source_domain);
 CREATE INDEX IF NOT EXISTS idx_blacklist_type ON blacklist(type);
@@ -333,6 +334,13 @@ def get_connection():
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
+    # Perf + concurrency: NORMAL is safe under WAL (no per-commit fsync); busy_timeout
+    # lets readers wait for the background-refresh writer instead of raising
+    # "database is locked"; temp_store/cache_size speed up sorts and scans.
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA busy_timeout=5000")
+    conn.execute("PRAGMA temp_store=MEMORY")
+    conn.execute("PRAGMA cache_size=-16000")
     try:
         yield conn
     except Exception:
