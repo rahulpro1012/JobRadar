@@ -279,7 +279,24 @@ def init_db(app_config):
         _ensure_columns(conn)
         _seed_default_companies(conn)
         _seed_email_senders(conn)
+        _fail_stale_refresh_jobs(conn)
         conn.commit()
+
+
+def _fail_stale_refresh_jobs(conn):
+    """Mark refresh/scan jobs left in a non-terminal state as failed.
+
+    The worker runs in a background thread; if the process is killed mid-run
+    (container restart, Ctrl-C), the row stays 'pending'/'running'/'ai_scoring'
+    forever. On next boot the frontend would resume polling it via /latest and
+    never stop. Fail them on startup so /latest reports a terminal status."""
+    conn.execute(
+        """UPDATE refresh_jobs
+           SET status = 'failed',
+               error_message = 'Interrupted by a server restart',
+               completed_at = COALESCE(completed_at, datetime('now'))
+           WHERE status IN ('pending', 'running', 'ai_scoring')"""
+    )
 
 
 DEFAULT_EMAIL_SENDERS = [
